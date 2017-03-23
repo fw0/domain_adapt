@@ -83,6 +83,7 @@ def get_KMM_ineq_constraints(num_train, B_max, eps):
     return G,h
 
 def get_KMM_params(xs_train, xs_test, get_K):
+#    print(len(xs_train), 'KMM size')
     num_train = xs_train.shape[0]
     num_test = xs_test.shape[0]
     K = get_K(xs_train, xs_train)
@@ -109,6 +110,7 @@ def cvxopt_solver(P, q, G, h):
 #                  show_progress=False,\
                   )
     ans = np.array(ans['x'])[:,0]
+#    print ans
     return ans
 
 def get_KMM_ws(B_max, eps, get_K, xs_train, xs_test, cvxopt_solver=cvxopt_solver):
@@ -132,6 +134,7 @@ def get_trace_from_ws_and_Ks(eps, Ky, Kx, ws=None):
     #print 'ws', ws
     if ws is None:
         ws = np.ones(N)
+#    pdb.set_trace()
     ans = np.trace(np.dot(np.dot(np.diag(ws), Gy), np.linalg.inv(np.dot(np.diag(ws), Gx + float(N) * eps * np.eye(N)))))    
     return ans
     
@@ -154,12 +157,14 @@ def ortho(P):
 def get_tight_constraints(A, b, x):
     LHS = np.dot(A, x)
     assert (LHS < b).all()
+#    tight_eps = 1.1
     tight_eps = 0.0001
 #    tight_eps = 0.0000000001
     tight = (b - LHS) < tight_eps
 #    print 'num_tight:', np.sum(tight)
     A_tight = A[tight]
     b_tight = b[tight]
+    print np.sum(tight)
     return A_tight, b_tight
 
 def get_dxopt_delta_p(lin_solver, df_dx, d_dp_df_dx, d_dx_df_dx, A, b, xopt, p, delta_p_direction):
@@ -213,6 +218,7 @@ def get_dL_dp_thru_xopt(lin_solver, df_dx, d_dp_df_dx, d_dx_df_dx, dL_dxopt, A, 
     if L_args is None:
         dL_dxopt_anal_val1 = dL_dxopt(xopt) #
     else:
+#        pdb.set_trace()
         dL_dxopt_anal_val1 = dL_dxopt(xopt, L_args)
     
     # get tight constraints
@@ -236,7 +242,9 @@ def get_dL_dp_thru_xopt(lin_solver, df_dx, d_dp_df_dx, d_dx_df_dx, dL_dxopt, A, 
     # solve Cv=d for x
     v = lin_solver(C, d)
 #    print 'v', v
-#    print 'solver error:', np.linalg.norm(np.dot(C,v) - d)
+    #print C
+    #print d
+    print 'solver error:', np.linalg.norm(np.dot(C,v) - d)
 
     # make D
     if f_args is None:
@@ -248,11 +256,27 @@ def get_dL_dp_thru_xopt(lin_solver, df_dx, d_dp_df_dx, d_dx_df_dx, dL_dxopt, A, 
 
     return np.sum(D.T * v[tuple([np.newaxis for i in xrange(len(p.shape))])+(slice(None),)], axis=-1).T
 
+# NEW!
+def get_dobj_dB(use_yu, xs_train, xs_test, Ky, y, SDR_get_K, KMM_get_K, dobj_dh, A, b, dobj_dB, B, P):
+
+    # calculate intermediate stuff
+    us_train = np.dot(xs_train, P)
+    us_test = np.dot(xs_test, P)
+    KMM_Ku, kappau = get_KMM_params(us_train, us_test, KMM_get_K)
+    wsopt = cvxopt_solver(KMM_Ku, kappau, A, b)
+
+    SDR_Ku = SDR_get_K(us_train, us_train)
+
+    if not use_yu:
+        return dobj_dB(B, (Ky, SDR_Ku), wsopt)
+    else:
+        return dobj_dB(B, (Ky, SDR_Ku), (y, us_train), wsopt)
+
 # stuff for input=P, output=L, intermediate variables are w*.  these fxns return actual values
 
-def get_dobj_dP(xs_train, xs_test, Ky, SDR_get_K, KMM_get_K, dobj_dP_thru_Ku, lin_solver, cvxopt_solver, df_dws, d_dP_df_dws, d_dws_df_dws, dobj_dwsopt, A, b, P):
+# WRITE_NEW get_dL_dp_thru_xopt should accept predictor in L_args, predictor should be added as argument, dobj_DP_thru_Ku should accept predictor
+def get_dobj_dP(use_yu, xs_train, xs_test, Ky, y, SDR_get_K, KMM_get_K, dobj_dP_thru_Ku, lin_solver, cvxopt_solver, df_dws, d_dP_df_dws, d_dws_df_dws, dobj_dwsopt, A, b, P, B=None):
     # wrapper
-
     # calculate intermediate stuff
     us_train = np.dot(xs_train, P)
     us_test = np.dot(xs_test, P)
@@ -261,37 +285,65 @@ def get_dobj_dP(xs_train, xs_test, Ky, SDR_get_K, KMM_get_K, dobj_dP_thru_Ku, li
 
     # gradient thru wsopt
     SDR_Ku = SDR_get_K(us_train, us_train)
-    dobj_dP_thru_wsopt_val = get_dL_dp_thru_xopt(lin_solver, df_dws, d_dP_df_dws, d_dws_df_dws, dobj_dwsopt, A, b, wsopt, P, L_args=(Ky, SDR_Ku)) # NVM.  changed so that f(x,p) can also accept optional args
+    if B is None:
+        if not use_yu:
+            dobj_dP_thru_wsopt_val = get_dL_dp_thru_xopt(lin_solver, df_dws, d_dP_df_dws, d_dws_df_dws, dobj_dwsopt, A, b, wsopt, P, L_args=(Ky, SDR_Ku)) # L_args is the 2nd argument to dobj_dwsopt
+        else:
+            dobj_dP_thru_wsopt_val = get_dL_dp_thru_xopt(lin_solver, df_dws, d_dP_df_dws, d_dws_df_dws, dobj_dwsopt, A, b, wsopt, P, L_args=(Ky, SDR_Ku, y, us_train))
+    else:
+        if not use_yu:
+            dobj_dP_thru_wsopt_val = get_dL_dp_thru_xopt(lin_solver, df_dws, d_dP_df_dws, d_dws_df_dws, dobj_dwsopt, A, b, wsopt, P, L_args=(Ky, SDR_Ku, B)) # NEW! means dobj_dwsopt will accept h in 2nd argument
+        else:
+            dobj_dP_thru_wsopt_val = get_dL_dp_thru_xopt(lin_solver, df_dws, d_dP_df_dws, d_dws_df_dws, dobj_dwsopt, A, b, wsopt, P, L_args=(Ky, SDR_Ku, y, us_train, B))
 
     # gradient thru Ku
-    dobj_dP_thru_Ku_val = dobj_dP_thru_Ku(P, wsopt)
+    if B is None:
+        dobj_dP_thru_Ku_val = dobj_dP_thru_Ku(P, wsopt)
+    else:
+        dobj_dP_thru_Ku_val = dobj_dP_thru_Ku(P, wsopt, B) # NEW!
 
     return dobj_dP_thru_wsopt_val + dobj_dP_thru_Ku_val
 
-def get_obj(obj_from_ws_and_Ks, xs_train, xs_test, Ky, KMM_get_K, SDR_get_K, cvxopt_solver, A, b, P):
+# WRITE_NEW where obj_from_ws_and_Ks also accepts the predictor.  predictor is also added as an argument
+# NEW!
+def get_obj(use_yu, obj_from_ws_and_Ks, xs_train, xs_test, Ky, y, KMM_get_K, SDR_get_K, cvxopt_solver, A, b, P, B=None):
 
     # wrapper
 
     us_train = np.dot(xs_train, P)
     us_test = np.dot(xs_test, P)
+#    pdb.set_trace()
     Ku, kappau = get_KMM_params(us_train, us_test, KMM_get_K)
+#    pdb.set_trace()
     wsopt = cvxopt_solver(Ku, kappau, A, b)
     SDR_Ku = SDR_get_K(us_train, us_train)
-    return obj_from_ws_and_Ks((Ky, SDR_Ku), wsopt)
-
+    if B is None:
+        if not use_yu:
+            return obj_from_ws_and_Ks((Ky, SDR_Ku), wsopt)
+        else:
+            try:
+                return obj_from_ws_and_Ks((Ky, SDR_Ku), (y, us_train), wsopt)
+            except Exception as e:
+                print e
+                pdb.set_trace()
+    else:
+        if not use_yu:
+            return obj_from_ws_and_Ks((Ky, SDR_Ku), wsopt, B) # NEW!
+        else:
+            return obj_from_ws_and_Ks((Ky, SDR_Ku), (y, us_train), wsopt, B)
 # stuff for input=w*, input=P, intermediate variables are B*
 
-def weighted_logreg_loss(reg, ws, (ys, xs), B):
+#def weighted_logreg_loss(reg, ws, (ys, xs), B):
     #print 'ws',ws.shape, 'ys',ys.shape, 'xs',xs.shape, 'B',B.shape
-    return logloss(ys, np.dot(xs,B), ws) + (0.5 * reg * np.dot(B, B)) #/ float(len(ys))
+#    return logloss(ys, np.dot(xs,B), ws) + (0.5 * reg * np.dot(B, B)) #/ float(len(ys))
 
 def logloss(ys, ys_hat, ws=None):
     #print 'ws',ws.shape, 'ys',ys.shape, 'xs',xs.shape, 'B',B.shape
     if ws is None:
-        return np.sum(np.log(1 + np.exp(-ys * ys_hat))) #+ (0.5 * reg * np.dot(B, B)) #/ float(len(ys))
+        return np.sum(np.log(1 + np.exp(-ys * ys_hat))) / float(len(ys)) #+ (0.5 * reg * np.dot(B, B)) #/ float(len(ys))
     else:
         try:
-            return np.sum(ws * np.log(1 + np.exp(-ys * ys_hat))) #+ (0.5 * reg * np.dot(B, B)) #/ float(len(ys))
+            return np.sum(ws * np.log(1 + np.exp(-ys * ys_hat))) / float(len(ys)) #+ (0.5 * reg * np.dot(B, B)) #/ float(len(ys))
         except:
             pdb.set_trace()
     
@@ -304,31 +356,44 @@ def weighted_logreg_get_Bopt(reg, ws, (ys, xs)):
     #print fitter.coef_
     return fitter.coef_[0,:]
 
-def Bopt_get_dobj_dwsopt_thru_Bopt(get_Bopt, dobj_dwsopt_thru_wsopt, lin_solver, cvxopt_solver, dg_dB, d_dwsopt_dg_dB, d_dB_dg_dB, dobj_dBopt, wsopt, (Ky, SDR_Ku)):
+#def Bopt_get_dobj_dwsopt_thru_Bopt(get_Bopt, dobj_dwsopt_thru_wsopt, lin_solver, cvxopt_solver, dg_dB, d_dwsopt_dg_dB, d_dB_dg_dB, dobj_dBopt, wsopt, (Ky, SDR_Ku)):
     # wrapper
 
     # calculate intermediate stuff
-    Bopt = get_Bopt(wsopt, (Ky, SDR_Ku)) # IMPLEMENT
+#    Bopt = get_Bopt(wsopt, (Ky, SDR_Ku)) # IMPLEMENT
 
     # gradient through Bopt
-    B_dim = SDR_Ku.shape[1]
-    dobj_dwsopt_thru_Bopt_val = get_dL_dp_thru_xopt(lin_solver, dg_dB, d_dwsopt_dg_dB, d_dB_dg_dB, dobj_dBopt, np.zeros((0,B_dim)), np.zeros((0,)), Bopt, wsopt, L_args=(wsopt, (Ky, SDR_Ku)), f_args=(Ky, SDR_Ku))
+#    B_dim = SDR_Ku.shape[1]
+#    dobj_dwsopt_thru_Bopt_val = get_dL_dp_thru_xopt(lin_solver, dg_dB, d_dwsopt_dg_dB, d_dB_dg_dB, dobj_dBopt, np.zeros((0,B_dim)), np.zeros((0,)), Bopt, wsopt, L_args=(wsopt, (Ky, SDR_Ku)), f_args=(Ky, SDR_Ku))
 
-    return dobj_dwsopt_thru_Bopt_val
+#    return dobj_dwsopt_thru_Bopt_val
 
-def Bopt_get_dobj_dwsopt(get_Bopt, dobj_dwsopt_thru_wsopt, lin_solver, cvxopt_solver, dg_dB, d_dwsopt_dg_dB, d_dB_dg_dB, dobj_dBopt, wsopt, (Ky, SDR_Ku)):
+def Bopt_get_dobj_dwsopt(use_yu, get_Bopt, dobj_dwsopt_thru_wsopt, lin_solver, cvxopt_solver, dg_dB, d_dwsopt_dg_dB, d_dB_dg_dB, dobj_dBopt, wsopt, L_args):
     # wrapper
 
     # calculate intermediate stuff
-    Bopt = get_Bopt(wsopt, (Ky, SDR_Ku)) # IMPLEMENT
+    if not use_yu:
+        Ky, SDR_Ku = L_args
+        Bopt = get_Bopt(wsopt, (Ky, SDR_Ku)) # IMPLEMENT
+    else:
+        Ky, SDR_Ku, y, u = L_args
+        Bopt = get_Bopt(wsopt, (Ky, SDR_Ku), (y,u))
 
     # gradient through Bopt
-    B_dim = SDR_Ku.shape[1]
-    dobj_dwsopt_thru_Bopt_val = get_dL_dp_thru_xopt(lin_solver, dg_dB, d_dwsopt_dg_dB, d_dB_dg_dB, dobj_dBopt, np.zeros((0,B_dim)), np.zeros((0,)), Bopt, wsopt, L_args=(wsopt, (Ky, SDR_Ku)), f_args=(Ky, SDR_Ku))
+    #B_dim = SDR_Ku.shape[1]
+    
+
+    if not use_yu:
+        dobj_dwsopt_thru_Bopt_val = get_dL_dp_thru_xopt(lin_solver, dg_dB, d_dwsopt_dg_dB, d_dB_dg_dB, dobj_dBopt, np.zeros((0,Bopt.shape[0])), np.zeros((0,)), Bopt, wsopt, L_args=(wsopt, (Ky, SDR_Ku)), f_args=(Ky, SDR_Ku))
+    else:
+        dobj_dwsopt_thru_Bopt_val = get_dL_dp_thru_xopt(lin_solver, dg_dB, d_dwsopt_dg_dB, d_dB_dg_dB, dobj_dBopt, np.zeros((0,Bopt.shape[0])), np.zeros((0,)), Bopt, wsopt, L_args=(wsopt, ((Ky, SDR_Ku),(y,u))), f_args=(Ky, SDR_Ku, y, u))
 
     # gradient through wsopt directly
     #dobj_dwsopt_thru_wsopt_val = dobj_dwsopt_thru_wsopt(wsopt, Bopt, L_args=(Ky, SDR_Ku), f_args=(Ky, SDR_Ku)) # CHANGE: note THREE arguments
-    dobj_dwsopt_thru_wsopt_val = dobj_dwsopt_thru_wsopt(wsopt, Bopt, (Ky, SDR_Ku))
+    if use_yu:
+        dobj_dwsopt_thru_wsopt_val = dobj_dwsopt_thru_wsopt(wsopt, Bopt, (Ky, SDR_Ku),(y,u))
+    else:
+        dobj_dwsopt_thru_wsopt_val = dobj_dwsopt_thru_wsopt(wsopt, Bopt, (Ky, SDR_Ku))
     
     return dobj_dwsopt_thru_Bopt_val + dobj_dwsopt_thru_wsopt_val
 
@@ -341,22 +406,28 @@ def Bopt_get_dobj_dP_thru_Bopt(Ky, SDR_get_K, get_Bopt, dobj_dP_thru_Ku, lin_sol
     Bopt = get_Bopt(wsopt, (SDR_Ky, SDR_Ku))
     
     # gradient through Bopt
-    B_dim = SDR_Ku.shape[1]
-#    pdb.set_trace()
+#    B_dim = SDR_Ku.shape[1]
+    pdb.set_trace()
     dobj_dP_thru_Bopt_val = get_dL_dp_thru_xopt(lin_solver, dg_dB, d_dP_dg_dB, d_dB_dg_dB, dobj_dBopt, np.zeros((0,B_dim)), np.zeros((0,)), Bopt, P, L_args=(wsopt, (SDR_Ky, SDR_Ku)), f_args=(wsopt,SDR_Ky)) # dobj_dBopt should accept (wsopt, (Ky, SDR_Ku)), same as that used in get_dobj_dwsopt_thru_Bopt
     return dobj_dP_thru_Bopt_val
     
-def Bopt_get_dobj_dP(xs_train, Ky, SDR_get_K, get_Bopt, dobj_dP_thru_Ku, lin_solver, cvxopt_solver, dg_dB, d_dP_dg_dB, d_dB_dg_dB, dobj_dBopt, P, wsopt):
+def Bopt_get_dobj_dP(use_yu, xs_train, Ky, y, SDR_get_K, get_Bopt, dobj_dP_thru_Ku, lin_solver, cvxopt_solver, dg_dB, d_dP_dg_dB, d_dB_dg_dB, dobj_dBopt, P, wsopt):
     # wrapper
 
     # calculate intermediate stuff
     us_train = np.dot(xs_train, P)
     SDR_Ku = SDR_get_K(us_train, us_train)
-    Bopt = get_Bopt(wsopt, (Ky, SDR_Ku))
+    if not use_yu:
+        Bopt = get_Bopt(wsopt, (Ky, SDR_Ku))
+    else:
+        Bopt = get_Bopt(wsopt, (Ky, SDR_Ku), (y,us_train))
 
     # gradient through Bopt
-    B_dim = SDR_Ku.shape[1]
-    dobj_dP_thru_Bopt_val = get_dL_dp_thru_xopt(lin_solver, dg_dB, d_dP_dg_dB, d_dB_dg_dB, dobj_dBopt, np.zeros((0,B_dim)), np.zeros((0,)), Bopt, P, L_args=(wsopt, (Ky, SDR_Ku)), f_args=(wsopt,Ky)) # dobj_dBopt should accept (wsopt, (Ky, SDR_Ku)), same as that used in get_dobj_dwsopt_thru_Bopt
+    #B_dim = SDR_Ku.shape[1]
+    if not use_yu:
+        dobj_dP_thru_Bopt_val = get_dL_dp_thru_xopt(lin_solver, dg_dB, d_dP_dg_dB, d_dB_dg_dB, dobj_dBopt, np.zeros((0,Bopt.shape[0])), np.zeros((0,)), Bopt, P, L_args=(wsopt, (Ky, SDR_Ku)), f_args=(wsopt,Ky)) # dobj_dBopt should accept (wsopt, (Ky, SDR_Ku)), same as that used in get_dobj_dwsopt_thru_Bopt
+    else:
+        dobj_dP_thru_Bopt_val = get_dL_dp_thru_xopt(lin_solver, dg_dB, d_dP_dg_dB, d_dB_dg_dB, dobj_dBopt, np.zeros((0,Bopt.shape[0])), np.zeros((0,)), Bopt, P, L_args=(wsopt, ((Ky, SDR_Ku),(y,us_train))), f_args=(wsopt,Ky,y))
 
     # gradient through P directly
     dobj_dP_thru_P_val = dobj_dP_thru_Ku(P, wsopt, Bopt) # has Bs_opt as argument compared to the original dobj_dP_thru_Ku.  should really pass in Ky as well, instead of using closure
@@ -381,7 +452,7 @@ def ws_obj_f(xs_train, xs_test, get_K, ws, P):
     return np.dot(np.dot(ws.T, K), ws)/2. + np.dot(kappa, ws)
 
 def ws_distance(ws):
-    return np.dot(ws.T, ws) / (len(ws)**2)
+    return np.dot(ws.T, ws) / (len(ws)**1)
 
 
 
@@ -389,7 +460,8 @@ def ws_distance(ws):
 #def get_obj_and_obj_gradient(KMM_get_K, B_max, KMM_eps, SDR_get_K, SDR_get_Ky, obj_from_ws_and_Ks, lin_solver, cvxopt_solver, xs_train, xs_test, ys_train):
 #    pass
 
-def get_obj_and_obj_gradient(KMM_get_K, B_max, KMM_eps, SDR_get_K, SDR_get_Ky, obj_from_ws_and_Ks, dobj_dwsopt, get_dobj_dP_thru_Ku, lin_solver, cvxopt_solver, xs_train, xs_test, ys_train):
+# WRITE_NEW that returns 3rd gradient wrt to predictor.  
+def get_obj_and_obj_gradient(KMM_get_K, B_max, KMM_eps, SDR_get_K, SDR_get_Ky, obj_from_ws_and_Ks, dobj_dwsopt, get_dobj_dP_thru_Ku, lin_solver, cvxopt_solver, xs_train, xs_test, ys_train, use_yu=False, dobj_dB=None):
     # get_dobj_dP_thru_Ku accepts xs_train, SDR_get_K, Ky
     
     the_f = functools.partial(ws_obj_f, xs_train, xs_test, KMM_get_K)
@@ -411,15 +483,22 @@ def get_obj_and_obj_gradient(KMM_get_K, B_max, KMM_eps, SDR_get_K, SDR_get_Ky, o
 
     #dobj_dP_thru_Ku = autograd.jacobian(obj_from_P_and_wsopt)
 
-    dobj_dP_thru_Ku = get_dobj_dP_thru_Ku(xs_train, SDR_get_K, Ky)
+    if not use_yu:
+        dobj_dP_thru_Ku = get_dobj_dP_thru_Ku(xs_train, SDR_get_K, Ky)
+    else:
+        dobj_dP_thru_Ku = get_dobj_dP_thru_Ku(xs_train, SDR_get_K, Ky, ys_train)
 
     A, b = get_KMM_ineq_constraints(len(xs_train), B_max, KMM_eps)
 
-    dobj_dP = functools.partial(get_dobj_dP, xs_train, xs_test, Ky, SDR_get_K, KMM_get_K, dobj_dP_thru_Ku, lin_solver, cvxopt_solver, df_dws, d_dP_df_dws, d_dws_df_dws, dobj_dwsopt, A, b)
+    dobj_dP = functools.partial(get_dobj_dP, use_yu, xs_train, xs_test, Ky, ys_train, SDR_get_K, KMM_get_K, dobj_dP_thru_Ku, lin_solver, cvxopt_solver, df_dws, d_dP_df_dws, d_dws_df_dws, dobj_dwsopt, A, b)
 
-    obj = functools.partial(get_obj, obj_from_ws_and_Ks, xs_train, xs_test, Ky, KMM_get_K, SDR_get_K, cvxopt_solver, A, b)
+    obj = functools.partial(get_obj, use_yu, obj_from_ws_and_Ks, xs_train, xs_test, Ky, ys_train, KMM_get_K, SDR_get_K, cvxopt_solver, A, b)
 
-    return obj, dobj_dP
+    if dobj_dB is None:
+        return obj, dobj_dP
+    else:
+        dobj_dB_actual = functools.partial(get_dobj_dB, use_yu, xs_train, xs_test, Ky, ys_train, SDR_get_K, KMM_get_K, dobj_dB, A, b, dobj_dB)
+        return obj, dobj_dP, dobj_dB_actual
 
 # diagnostic fxns
 
@@ -485,6 +564,8 @@ def plot_y_vs_u(xs_train, ys_train, P, xs_test=None, ys_test=None, xlim=None, yl
             ax.legend()
         ax.set_xlabel('u0')
         ax.set_ylabel('y')
+        ax.set_title('y vs projected features')
+        basic.display_fig_inline(fig)
     elif P.shape[1] == 2:
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
@@ -495,8 +576,8 @@ def plot_y_vs_u(xs_train, ys_train, P, xs_test=None, ys_test=None, xlim=None, yl
         ax.set_xlabel('u0')
         ax.set_ylabel('u1')
         ax.set_zlabel('y')
-    ax.set_title('y vs projected features')
-    basic.display_fig_inline(fig)
+        ax.set_title('y vs projected features')
+        basic.display_fig_inline(fig)
 
 def plot_opt_log(opt_log):
 
@@ -519,6 +600,7 @@ def plot_opt_log(opt_log):
 ###### sklearn wrappers
 
 from sklearn.base import TransformerMixin as TransformerMixin
+import sklearn.linear_model
 
 class myTransformerMixin(TransformerMixin):
 
@@ -531,6 +613,12 @@ class myTransformerMixin(TransformerMixin):
         return self
 
 class predictProbaLogisticRegression(sklearn.linear_model.LogisticRegression):
+
+    def predict(self, X):
+        ps = self.predict_proba(X)[:,1]
+        return np.log(ps / (1.-ps))
+
+class predictProbaSVM(sklearn.svm.SVC):
 
     def predict(self, X):
         ps = self.predict_proba(X)[:,1]
@@ -563,6 +651,11 @@ class shiftEstimator(object):#myTransformerMixin):
 class shiftLogisticRegression(shiftEstimator, predictProbaLogisticRegression):
     pass
 
+class shiftSVM(shiftEstimator, predictProbaSVM):
+    pass
+
+class shiftRegression(shiftEstimator, sklearn.linear_model.LinearRegression):
+    pass
 
 def shift_Xy_to_matrices(shift_X, shift_y=None, weights=False):
 
@@ -639,6 +732,7 @@ class projection_estimator(myTransformerMixin):
     def transform(self, shift_X):
         source_X, target_X, source_y = shift_Xy_to_matrices(shift_X)
         return matrices_to_shift_Xy(np.dot(source_X,self.P), np.dot(target_X,self.P), source_y)
+
     
 class weighted_estimator(myTransformerMixin):
 
@@ -669,6 +763,14 @@ class weighted_estimator(myTransformerMixin):
         
 # utility fxns
 
+def equal_size_cv(n, num_chunks):
+    bs = map(int, np.linspace(0,n,num_chunks))
+    ans = []
+    for (l,r) in itertools.izip(bs[0:-1],bs[1:]):
+        ans.append([range(l,(l+r)/2), range((l+r)/2,r)])
+        ans.append([range((l+r)/2,r), range(l,(l+r)/2)])
+    return ans
+
 def mat_median(m):
     l = len(m)
     v = np.arange(l).reshape((l,1))
@@ -677,7 +779,7 @@ def mat_median(m):
 def median_distance(xs1, xs2):
     if len(xs1.shape) == 1:
         diff = xs1[:,np.newaxis] - xs2[np.newaxis,:]
-        norms = np.sum(diff * diff, axis=1) ** 0.5
+        norms = (diff * diff) ** 0.5
     elif len(xs1.shape) == 2:
         diff = xs1[:,np.newaxis,:] - xs2[np.newaxis,:,:]
         norms = np.sum(diff * diff, axis=2) ** 0.5
@@ -697,4 +799,66 @@ def weighted_lsqr_loss(ws, xs, ys):
     temp3 = temp4 - np.dot(temp4,temp2)
     ans = np.sum(np.dot(temp3,ys))
     #print ans2, ans, np_weighted_lsqr_loss(ws, xs, ys), np.linalg.inv(xs.T.dot(W).dot(xs)).shape, ws.shape, xs.shape, ys.shape
-    return ans
+    return ans / float(len(ws))
+
+
+def shift_scorer(use_frac, loss, estimator, shift_X, shift_y):
+    use_shift_X = shift_X[0:int(use_frac*len(shift_X))]
+    use_shift_y = shift_y[0:int(use_frac*len(shift_y))]
+    ys_hat = estimator.predict(use_shift_X) # assumes estimator predicts target, not source
+    source_X, target_X, source_y, target_y = kernels.shift_Xy_to_matrices(use_shift_X, use_shift_y)
+    return -loss(target_y, ys_hat) 
+
+def nocheat_shift_scorer(B_max, KMM_eps, get_get_K, loss, estimator, shift_X, shift_y):
+    _shift_X = shift_X
+    for (name, transform) in estimator.steps[:-1]:
+        _shift_X = transform.transform(_shift_X)
+    projected_shift_X = _shift_X
+    projected_source_X, projected_target_X, source_y, target_y = shift_Xy_to_matrices(projected_shift_X, shift_y)
+    source_X, target_X, source_y, target_y = shift_Xy_to_matrices(shift_X, shift_y)
+    switched_shift_X, switched_shift_y = matrices_to_shift_Xy(target_X, source_X, target_y, source_y)
+    source_ys_hat = estimator.predict(switched_shift_X) # assumes estimator predicts target, not source
+    source_ws = get_KMM_ws(B_max, KMM_eps, get_get_K(projected_source_X, projected_target_X), projected_source_X, projected_target_X)
+#    source_X, target_X, source_y, target_y = kernels.shift_Xy_to_matrices(use_shift_X, use_shift_y)
+    return -loss(source_y, source_ys_hat, source_ws) 
+
+
+def do_shift_CV(num_folds, model, shift_X, shift_y):
+    from scipy import interp
+    import matplotlib
+    import python_utils.python_utils.caching as caching
+    from sklearn.metrics import roc_curve, auc
+    import pandas as pd
+    matplotlib.rcParams.update({'font.size': 16})
+    fig, ax = plt.subplots()
+    fpr_points = np.linspace(0.,1.,101)
+    roc_curves = []
+    auc_vals = []
+    log_losses = []
+    color = 'r'
+    label = 'asdf'
+    from sklearn.cross_validation import KFold
+    outer_cv = sklearn.cross_validation.KFold(len(shift_X), num_folds)
+    for (i,(train, test)) in enumerate(reversed(list(outer_cv))):
+        print('cv', i)
+        shift_X_train, shift_y_train = [shift_X[idx] for idx in train], [shift_y[idx] for idx in train]
+        shift_X_test, shift_y_test = [shift_X[idx] for idx in test], [shift_y[idx] for idx in test]
+        model.fit(shift_X_train, shift_y_train)
+        target_y_test_hat = model.predict(shift_X_test)
+        source_X_test, target_X_test, source_y_test, target_y_test = shift_Xy_to_matrices(shift_X_test, shift_y_test)
+        fpr, tpr, thresholds = roc_curve(target_y_test, target_y_test_hat)
+        log_losses.append(logloss(target_y_test, target_y_test_hat))
+        caching.fig_archiver.log_text('log_losses')
+        caching.fig_archiver.log_text(log_losses)
+        auc_vals.append(auc(fpr,tpr))
+        caching.fig_archiver.log_text('auc_vals')
+        caching.fig_archiver.log_text(auc_vals)
+        roc_curves.append(interp(fpr_points, fpr, tpr))
+        ax.plot(fpr, tpr, color = color, alpha=0.75, zorder=np.random.random())
+        caching.fig_archiver.archive_fig(fig)
+    roc_curves_df = pd.DataFrame(roc_curves, columns=fpr_points)
+    ax.plot(fpr_points, roc_curves_df.mean(), linewidth=5, color=color, label=label)
+    ax.set_xlabel('fpr',fontsize=22)
+    ax.set_ylabel('tpr',fontsize=22)
+    print(pd.Series(auc_vals), 'mean:', np.mean(auc_vals), 'std:', np.std(auc_vals))
+    caching.fig_archiver.archive_fig(fig)
