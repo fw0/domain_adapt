@@ -85,7 +85,7 @@ def get_logreg_obj_and_gradients(lin_solver, cvxopt_solver, tradeoff, reg):
     
         return dg_dB, d_dP_dg_dB, d_dB_dg_dB, dobj_dBopt, dobj_dP_thru_Ku
 
-    def get_dobj_dP_thru_Ku(xs_train, SDR_get_K, Ky):
+ def get_dobj_dP_thru_Ku(xs_train, SDR_get_K, Ky):
     
         dg_dB, d_dP_dg_dB, d_dB_dg_dB, dobj_dBopt, dobj_dP_thru_Ku = get_dobj_dP_thru_Ku_stuff(xs_train, SDR_get_K, Ky)
     
