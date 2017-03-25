@@ -62,11 +62,15 @@ def logreg_data(x_dim, u_dim, v_dim, num_train, num_test):
 
     return xs_train, xs_test, ys_train, ys_test
 
+<<<<<<< .merge_file_JNRWRg
 <<<<<<< .merge_file_yiQMok
 def why_weighting_is_important_data(x_dim, num_train, num_test, shift=0):
 =======
 def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, axis_boundaries=np.cumsum(np.arange(7))):
 >>>>>>> .merge_file_u00BDh
+=======
+def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, axis_boundaries=np.cumsum(np.arange(7))):
+>>>>>>> .merge_file_yH3jQd
 
     u_dim = 1
     #v_dim = 2
@@ -96,6 +100,7 @@ def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, 
     #axis_boundaries = np.array([0,1,3,6,10,15,21])
     assert len(axis_boundaries) % 2 == 1
     boundaries = axis_boundaries * (2**0.5)
+<<<<<<< .merge_file_JNRWRg
 
 #    train_us = np.random.uniform(low=0., =boundaries[-1], size=num_train)
 
@@ -140,6 +145,52 @@ def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, 
     #p_u_test_pdf = p_u_test_dist.pdf
     #p_u_test_sample = p_u_test_dist.rvs
 
+=======
+
+#    train_us = np.random.uniform(low=0., =boundaries[-1], size=num_train)
+
+    def boundary_sample(left_boundaries, right_boundaries, num):
+        print left_boundaries, right_boundaries
+        assert len(right_boundaries) == len(left_boundaries)
+        widths = right_boundaries - left_boundaries
+        print widths, 'widths'
+        print np.cumsum(widths), 'cumsum'
+        support_width = np.sum(widths)
+        print support_width, 'support_width'
+        support_coordinates = np.random.uniform(low=0., high=support_width, size=num)
+        #print support_coordinates[0:20], 'support_coordinates'
+        support_segment_paddings = np.array([0.])
+        support_segment_paddings = np.append(support_segment_paddings,np.cumsum(widths))
+        print support_segment_paddings, 'support_segment_paddings'
+        gts = support_coordinates[:,np.newaxis] > support_segment_paddings[0:-1]
+#        lts = support_coordinates[:,np.newaxis] <= support_segment_paddings + widths[0]
+        lts = support_coordinates[:,np.newaxis] <= support_segment_paddings[1:]
+        #print gts[0:20]
+        #print lts[0:20]
+        #print gts.astype(int) + lts.astype(int)
+        in_segments = (gts.astype(int) + lts.astype(int)) == 2
+        #print in_segments
+        #print gts[0:20]
+        #print lts[0:20]
+        #print (gts.astype(int) + lts.astype(int))[0:20]
+        assert np.all(np.sum(in_segments, axis=1) == np.ones(num))
+        which_segment = np.argmax(in_segments, axis=1)
+#        which_segment = np.argmax(support_coordinates[:,np.newaxis] > support_segment_paddings, axis=1)
+        #print which_segment[0:20], 'which_segment'
+        offset = support_coordinates - support_segment_paddings[which_segment]
+        #print offset[0:20], 'offset'
+        samples = left_boundaries[which_segment] + offset
+        fig, ax = plt.subplots()
+        ax.hist(samples,bins=10)
+        basic.display_fig_inline(fig)
+        return samples
+    
+
+    #p_u_test_dist = scipy.stats.uniform(loc=0., scale=2.**.5)
+    #p_u_test_pdf = p_u_test_dist.pdf
+    #p_u_test_sample = p_u_test_dist.rvs
+
+>>>>>>> .merge_file_yH3jQd
     perp_noise = 0.08
     p_u_perp_dist = scipy.stats.multivariate_normal(mean=np.zeros(shape=1), cov=np.eye(1)*perp_noise)
     p_u_perp_pdf = p_u_perp_dist.pdf
@@ -310,6 +361,7 @@ def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, 
     ys_train = y1s_train + y2s_train
     ys_test = y1s_test + y2s_test
 
+<<<<<<< .merge_file_JNRWRg
 <<<<<<< .merge_file_yiQMok
     ys_train += shift
     ys_test += shift
@@ -345,6 +397,33 @@ def v_data(x_dim, num_train, num_test):
 
     return xs_train, xs_test, ys_train, ys_test
 
+=======
+    return xs_train, xs_test, ys_train-1., ys_test-1.
+
+
+def v_data(x_dim, num_train, num_test):
+
+    def f(x):
+        if x > 0.:
+            y = x
+        else:
+            y = -x
+        return y
+
+    scale = 0.1
+
+#    xs_train = np.random.normal(loc=-1., scale=0.8, size=(num_train,1))
+    xs_train = np.random.uniform(low=-2., high=2., size=(num_train,))
+    xs_test = np.random.normal(loc=1., scale=0.8, size=(num_test,))
+    ys_train = np.array([f(x) + np.random.normal(scale=scale) for x in xs_train])
+    ys_test = np.array([f(x) + np.random.normal(scale=scale) for x in xs_test])
+
+    xs_train = np.concatenate((xs_train.reshape(num_train,1), np.random.normal(size=(num_train,x_dim-1))), axis=1)
+    xs_test = np.concatenate((xs_test.reshape(num_test,1), np.random.normal(size=(num_test,x_dim-1))), axis=1)
+
+    return xs_train, xs_test, ys_train, ys_test
+
+>>>>>>> .merge_file_yH3jQd
     
 class data(object):
 
@@ -419,4 +498,7 @@ class random_data(data):
         return xs_train, xs_test, ys_train, ys_test
 
     
+<<<<<<< .merge_file_JNRWRg
 >>>>>>> .merge_file_u00BDh
+=======
+>>>>>>> .merge_file_yH3jQd
