@@ -93,6 +93,7 @@ def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, 
     assert len(axis_boundaries) % 2 == 1
     boundaries = axis_boundaries * (2**0.5)
 
+
 #    train_us = np.random.uniform(low=0., =boundaries[-1], size=num_train)
 
     def boundary_sample(left_boundaries, right_boundaries, num):
@@ -135,6 +136,8 @@ def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, 
     #p_u_test_dist = scipy.stats.uniform(loc=0., scale=2.**.5)
     #p_u_test_pdf = p_u_test_dist.pdf
     #p_u_test_sample = p_u_test_dist.rvs
+
+
 
 
 #    train_us = np.random.uniform(low=0., =boundaries[-1], size=num_train)
@@ -404,7 +407,32 @@ def v_data(x_dim, num_train, num_test):
     xs_train = np.concatenate((xs_train.reshape(num_train,1), np.random.normal(size=(num_train,x_dim-1))), axis=1)
     xs_test = np.concatenate((xs_test.reshape(num_test,1), np.random.normal(size=(num_test,x_dim-1))), axis=1)
 
+
+    return xs_train, xs_test, ys_train-1., ys_test-1.
+
+
+def v_data(x_dim, num_train, num_test):
+
+    def f(x):
+        if x > 0.:
+            y = x
+        else:
+            y = -x
+        return y
+
+    scale = 0.1
+
+#    xs_train = np.random.normal(loc=-1., scale=0.8, size=(num_train,1))
+    xs_train = np.random.uniform(low=-2., high=2., size=(num_train,))
+    xs_test = np.random.normal(loc=1., scale=0.8, size=(num_test,))
+    ys_train = np.array([f(x) + np.random.normal(scale=scale) for x in xs_train])
+    ys_test = np.array([f(x) + np.random.normal(scale=scale) for x in xs_test])
+
+    xs_train = np.concatenate((xs_train.reshape(num_train,1), np.random.normal(size=(num_train,x_dim-1))), axis=1)
+    xs_test = np.concatenate((xs_test.reshape(num_test,1), np.random.normal(size=(num_test,x_dim-1))), axis=1)
+
     return xs_train, xs_test, ys_train, ys_test
+
 
     
 class data(object):
