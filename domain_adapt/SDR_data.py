@@ -136,6 +136,7 @@ def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, 
     #p_u_test_pdf = p_u_test_dist.pdf
     #p_u_test_sample = p_u_test_dist.rvs
 
+
 #    train_us = np.random.uniform(low=0., =boundaries[-1], size=num_train)
 
     def boundary_sample(left_boundaries, right_boundaries, num):
