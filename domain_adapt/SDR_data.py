@@ -87,6 +87,7 @@ def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, 
 #        else:
 #            return scipy.stats.uniform(loc=2**.5, scale=8.**.5 - 2**.5).rvs()
 
+
     num_sections = 3
 #    axis_boundaries = np.arange(0, (num_sections*2)+1)
     #axis_boundaries = np.array([0,1,3,6,10,15,21])
@@ -138,6 +139,15 @@ def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, 
     #p_u_test_sample = p_u_test_dist.rvs
 
 
+
+
+
+
+    num_sections = 3
+#    axis_boundaries = np.arange(0, (num_sections*2)+1)
+    #axis_boundaries = np.array([0,1,3,6,10,15,21])
+    assert len(axis_boundaries) % 2 == 1
+    boundaries = axis_boundaries * (2**0.5)
 
 
 #    train_us = np.random.uniform(low=0., =boundaries[-1], size=num_train)
@@ -354,6 +364,7 @@ def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, 
     ys_test = y1s_test + y2s_test
 
 
+
     ys_train += shift
     ys_test += shift
 
@@ -432,7 +443,6 @@ def v_data(x_dim, num_train, num_test):
     xs_test = np.concatenate((xs_test.reshape(num_test,1), np.random.normal(size=(num_test,x_dim-1))), axis=1)
 
     return xs_train, xs_test, ys_train, ys_test
-
 
     
 class data(object):
