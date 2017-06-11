@@ -128,9 +128,10 @@ def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, 
         offset = support_coordinates - support_segment_paddings[which_segment]
         #print offset[0:20], 'offset'
         samples = left_boundaries[which_segment] + offset
-        fig, ax = plt.subplots()
-        ax.hist(samples,bins=10)
-        basic.display_fig_inline(fig)
+        if False:
+            fig, ax = plt.subplots()
+            ax.hist(samples,bins=10)
+            basic.display_fig_inline(fig)
         return samples
     
 
@@ -183,9 +184,10 @@ def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, 
         offset = support_coordinates - support_segment_paddings[which_segment]
         #print offset[0:20], 'offset'
         samples = left_boundaries[which_segment] + offset
-        fig, ax = plt.subplots()
-        ax.hist(samples,bins=10)
-        basic.display_fig_inline(fig)
+        if False:
+            fig, ax = plt.subplots()
+            ax.hist(samples,bins=10)
+            basic.display_fig_inline(fig)
         return samples
     
 
@@ -317,16 +319,18 @@ def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, 
     num_train_useless = num_train - num_train_overlap
     us_train_overlap = boundary_sample(boundaries[0:-2:2], boundaries[1:-1:2], num_train_overlap)
     us_train_useless = boundary_sample(boundaries[1:-1:2], boundaries[2::2], num_train_useless)
-    fig,ax = plt.subplots()
-    ax.hist(us_train_overlap)
-    ax.hist(us_train_useless)
-    basic.display_fig_inline(fig)
+    if False:
+        fig,ax = plt.subplots()
+        ax.hist(us_train_overlap)
+        ax.hist(us_train_useless)
+        basic.display_fig_inline(fig)
     #pdb.set_trace()
     us_train = expand(np.concatenate((us_train_overlap, us_train_useless), axis=0))
-    fig,ax = plt.subplots()
-    ax.hist(us_train[:,0])
-    ax.set_title('all')
-    basic.display_fig_inline(fig)
+    if False:
+        fig,ax = plt.subplots()
+        ax.hist(us_train[:,0])
+        ax.set_title('all')
+        basic.display_fig_inline(fig)
     
     us_test = expand(boundary_sample(boundaries[0:-2:2], boundaries[1:-1:2], num_test))
     #us_train = expand(np.array([p_u_train_sample() for i in xrange(num_train)]))
@@ -351,22 +355,19 @@ def why_weighting_is_important_data(x_dim, num_train, num_test, proportion=0.5, 
     v2s_train = np.dot(xs_train, v2_base)
     v2s_test = np.dot(xs_test, v2_base)
     y1s_train = np.array([p_y1_given_v1_sample(v1) for v1 in v1s_train])
-    fig,ax = plt.subplots()
-    ax.scatter(v1s_train,y1s_train)
-    basic.display_fig_inline(fig)
+    if False:
+        fig,ax = plt.subplots()
+        ax.scatter(v1s_train,y1s_train)
+        basic.display_fig_inline(fig)
     y1s_test = np.array([p_y1_given_v1_sample(v1) for v1 in v1s_test])
     y2s_train = np.array([p_y2_given_v2_sample(v2) for v2 in v2s_train])
-    fig,ax = plt.subplots()
-    ax.scatter(v2s_train,y2s_train)
-    basic.display_fig_inline(fig)
+    if False:
+        fig,ax = plt.subplots()
+        ax.scatter(v2s_train,y2s_train)
+        basic.display_fig_inline(fig)
     y2s_test = np.array([p_y2_given_v2_sample(v2) for v2 in v2s_test])
     ys_train = y1s_train + y2s_train
     ys_test = y1s_test + y2s_test
-
-
-
-    ys_train += shift
-    ys_test += shift
 
     return xs_train, xs_test, ys_train, ys_test
 
