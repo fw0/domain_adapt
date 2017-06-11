@@ -178,7 +178,9 @@ def get_autograd_grad(f):
         horse = get_autograd_horse(len(args), care_argnums, f)
         care_args = [args[i] for i in care_argnums] if len(care_argnums) != 1 else args[care_argnums[0]] # special case
         nocare_args = [args[i] for i in xrange(len(args)) if not (i in care_argnums)]
+#        pdb.set_trace()
         ans = autograd.jacobian(horse)(care_args, nocare_args)
+#        ans = autograd.grad(horse)(care_args, nocare_args)
         return ans
         #return ans if len(ans) != 1 else ans[0]
 
@@ -246,6 +248,8 @@ def weighted_squared_loss_given_B(B, xs, ys, c, ws=None):
 
 def b_opt_to_squared_losses(B, xs, ys, b_opt):
     us = np.dot(xs, B)
+    if len(us.shape) == 1:
+        us = us.reshape((len(us),1))
     ys_hat = np.dot(us, b_opt)
     error = ys - ys_hat
     return error * error
@@ -262,31 +266,17 @@ def weighted_lsqr_loss_given_f(B, xs, ys, f, ws, c):
     return np.dot(ws, diff * diff) + (c * np.dot(f,f))
 
 
-def b_to_logreg_ratios(b_logreg, xs_train, xs_test, sigma, B):
+def b_to_logreg_ratios(b, xs_train, xs_test, sigma, B, max_ratio=5.):
     scale_sigma = False
-    if scale_sigma:
-        assert len(B.shape) == 1
-        sigma = sigma / np.linalg.norm(B)
-    us_train = np.dot(xs_train, B)
-    us_test = np.dot(xs_test, B)
-    us = np.concatenate((us_train, us_test))
-    if len(us.shape) == 1:
-        us = us.reshape((len(us),1))
-    K = utils.get_gaussian_K(sigma, us, us)
-    logits = np.dot(K, b_logreg)
-    logits_train = logits[:len(xs_train)]
-    ps_train = 1 / (1+np.exp(-logits_train))
-    #return ps_train
-    ratios_train = ps_train / (1.-ps_train)
-    ratios_train = (ratios_train / np.sum(ratios_train)) * len(xs_train)
-    #print b, 'b'
-    #print np.sum(b), 'b_sum'
-    #print ratios_train, 'ratios_train'
-    return ratios_train
+    return b_to_logreg_ratios_wrapper(b, xs_train, xs_test, sigma, scale_sigma, B, max_ratio)
 
 
-def b_to_logreg_ratios_scale_sigma(b, xs_train, xs_test, sigma, B):
+def b_to_logreg_ratios_scale_sigma(b, xs_train, xs_test, sigma, B, max_ratio=5.):
     scale_sigma = True
+    return b_to_logreg_ratios_wrapper(b, xs_train, xs_test, sigma, scale_sigma, B, max_ratio)
+
+
+def b_to_logreg_ratios_wrapper(b, xs_train, xs_test, sigma, scale_sigma, B, max_ratio=5.):
     if scale_sigma:
         assert len(B.shape) == 1
         sigma = sigma / np.linalg.norm(B)
@@ -301,7 +291,12 @@ def b_to_logreg_ratios_scale_sigma(b, xs_train, xs_test, sigma, B):
     ps_train = 1 / (1+np.exp(-logits_train))
     #return ps_train
     ratios_train = ps_train / (1.-ps_train)
+    #ratio_max = 5.
+#    ratio_max = 2.
+    ratios_train = np.minimum(ratios_train, np.ones(len(ratios_train)) * max_ratio)
+#    print max(ratios_train), 'max pre'
     ratios_train = (ratios_train / np.sum(ratios_train)) * len(xs_train)
+#    print max(ratios_train), 'max post'
     #print b, 'b'
     #print np.sum(b), 'b_sum'
     #print ratios_train, 'ratios_train'
@@ -345,6 +340,7 @@ class logreg_ratio_objective(objective):
     
     def _val(self, xs_train, xs_test, sigma, B, logreg_c, b):
         if self.scale_sigma:
+#            print B
             assert len(B.shape) == 1
             sigma = sigma / np.linalg.norm(B)
 #        pdb.set_trace()
@@ -423,15 +419,18 @@ class dopt_objective_dx(fxn):
         
 
 def get_tight_constraints(A, b, x):
+    verbose = False
     LHS = np.dot(A, x)
     assert (LHS < b).all()
     tight_eps = 0.01
     tight = (b - LHS) < tight_eps
-    print 'num_tight:', np.sum(tight)
+    if verbose: print 'num_tight:', np.sum(tight)
     return A[tight], b[tight]
         
 
 def get_dx_opt_delta_p(lin_solver, d_dp_df_dx_val, P, G, h, x_opt, p, delta_p_direction):
+
+    verbose = False
     
     # f(x, p) should be convex
     x_len = G.shape[1]
@@ -452,7 +451,7 @@ def get_dx_opt_delta_p(lin_solver, d_dp_df_dx_val, P, G, h, x_opt, p, delta_p_di
 
     # get deriv
     deriv = lin_solver(C, d)
-    print 'solver error:', np.linalg.norm(np.dot(C,deriv) - d)
+    if verbose: print 'solver error:', np.linalg.norm(np.dot(C,deriv) - d)
 
     return deriv
         
@@ -534,6 +533,9 @@ class full_ws_opt_given_B(full_quad_opt):
 
     
 def get_dg_dp_thru_x_opt(lin_solver, d_dp_df_dx_val, dg_dx_opt_val, P, G, h, x_opt, p):
+
+    verbose = False
+    
     # assumes L(x_opt), x_opt = argmin_x f(x,p) subject to Ax<=b
     
     # get tight constraints
@@ -552,7 +554,7 @@ def get_dg_dp_thru_x_opt(lin_solver, d_dp_df_dx_val, dg_dx_opt_val, P, G, h, x_o
 
     # solve Cv=d for x
     v = lin_solver(C, d)
-    print 'solver error:', np.linalg.norm(np.dot(C,v) - d)
+    if verbose: print 'solver error:', np.linalg.norm(np.dot(C,v) - d)
 
     # make D
     D = np.vstack((-d_dp_df_dx_val, np.zeros((num_tight,)+p.shape)))
