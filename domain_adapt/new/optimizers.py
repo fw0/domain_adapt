@@ -8,16 +8,16 @@ import utils
         
 class pymanopt_optimizer(object):
 
-    def __init__(self, maxiter=1000):
-        self.maxiter = maxiter
+    def __init__(self, **kwargs):
+        self.options = kwargs
     
     def optimize(self, objective, dobjective_dB, B_init):
         from pymanopt.solvers import SteepestDescent
         from pymanopt.manifolds import Stiefel
-        solver = pymanopt.solvers.SteepestDescent(logverbosity=2, maxiter=self.maxiter)
+        solver = pymanopt.solvers.SteepestDescent(**self.options)
         manifold = pymanopt.manifolds.Stiefel(B_init.shape[0], B_init.shape[1])
         from pymanopt import Problem
-        problem = pymanopt.Problem(manifold=manifold, cost=objective, egrad=dobjective_dB, verbosity=0)
+        problem = pymanopt.Problem(manifold=manifold, cost=objective, egrad=dobjective_dB, verbosity=2)
         B_fit, self.opt_log = solver.solve(problem, x=B_init)
         return B_fit
 
@@ -77,10 +77,14 @@ class scipy_minimize_optimizer(object):
     def __init__(self, method=None, options={}, verbose=False, info_f=None):
         self.method, self.options, self.verbose, self.info_f = method, options, verbose, info_f
 
-    def optimize(self, objective, dobjective_dx, x_init):
+    def optimize(self, objective, dobjective_dx, x_init, bounds=None):
+#        print self.verbose
+#        pdb.set_trace()
+#        print self.verbose, 'gggg'
         logger = utils.optimizer_logger(objective, dobjective_dx, self.verbose, self.info_f)
+#        logger = utils.optimizer_logger(objective, dobjective_dx, self.verbose, self.info_f)
         logger.l.append({'f':objective(x_init), 'grad_norm':np.linalg.norm(dobjective_dx(x_init))})
-        ans = scipy.optimize.minimize(fun=objective, x0=x_init, jac=dobjective_dx, method=self.method, options=self.options, callback=logger)
+        ans = scipy.optimize.minimize(fun=objective, x0=x_init, jac=dobjective_dx, method=self.method, options=self.options, callback=logger, bounds=bounds)
         self.opt_log = {'logger':logger, 'optimize_result':ans}
         return ans['x']
 
@@ -165,7 +169,7 @@ class multiple_optimizer(object):
         best_try = np.argmin(f_xs)
         assert np.min(f_xs) == f_xs[best_try]
         self.opt_log = {'opt_logs':opt_logs, 'final_objective':f_xs[best_try]}
-        print zip(xs, f_xs)
+        #print zip(xs, f_xs)
         return xs[best_try]
 
     def final_objective(self, opt_log):

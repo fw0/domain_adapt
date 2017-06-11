@@ -1,5 +1,6 @@
 import numpy as np
 import qp
+import utils
 
 def get_kmm_Gh(w_max, eps, num_train, num_test):
     w_max = float(w_max)
@@ -29,3 +30,10 @@ def get_cvxopt_KMM_ws(w_max, eps, K_train_train, K_train_test):
 
     # solve
     return qp.cvxopt_solver(K_train_train, kappa, G, h)
+
+
+def get_cvxopt_KMM_ws_sigma_median_distance(w_max, eps, xs_train, xs_test):
+    sigma = utils.median_distance(np.concatenate((xs_train, xs_test), axis=0), np.concatenate((xs_train, xs_test), axis=0))
+    K_train_train = utils.get_gaussian_K(sigma, xs_train, xs_train)
+    K_train_test = utils.get_gaussian_K(sigma, xs_train, xs_test)
+    return get_cvxopt_KMM_ws(w_max, eps, K_train_train, K_train_test)

@@ -4,6 +4,8 @@ import pandas as pd
 from IPython.display import display_pretty, display_html
 import python_utils.python_utils.basic as basic
 import matplotlib.pyplot as plt
+import pdb
+
 
 def ortho(P):
     ans = np.zeros(P.shape)
@@ -53,12 +55,18 @@ class optimizer_logger(object):
     def __call__(self, x):
         #print x
         val = self.f(x)
-        if self.verbose and (self.counter % self.verbose) == 0:
+        info = {'f':val, 'grad_norm':np.linalg.norm(self.df_dx(x))}
+#        print self.verbose, self.counter, self.f
+#        print 'step', self.counter, val
+        if self.verbose and ((self.counter % self.verbose) == 0):
             print 'step', self.counter, val
+            import sys
+            sys.stdout.flush()
             if not self.info_f is None:
                 self.info_f(x)
+            #print self.counter, info
         self.counter += 1
-        self.l.append({'f':val, 'grad_norm':np.linalg.norm(self.df_dx(x))})
+        self.l.append(info)
 
     def plot(self):
         df = pd.DataFrame(self.l)
@@ -66,7 +74,7 @@ class optimizer_logger(object):
         f_ax = fig.add_subplot(2,1,1)
         f_ax.plot(df.index, df['f'])
         f_ax.set_ylabel('$f$')
-        f_ax.set_ylim((0,None))
+#        f_ax.set_ylim((0,None))
         grad_norm_ax = fig.add_subplot(2,1,2)
         grad_norm_ax.plot(df.index, df['grad_norm'])
         grad_norm_ax.set_ylabel('$|df\_dx|$')
