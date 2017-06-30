@@ -34,6 +34,6 @@ def get_cvxopt_KMM_ws(w_max, eps, K_train_train, K_train_test):
 
 def get_cvxopt_KMM_ws_sigma_median_distance(w_max, eps, xs_train, xs_test):
     sigma = utils.median_distance(np.concatenate((xs_train, xs_test), axis=0), np.concatenate((xs_train, xs_test), axis=0))
-    K_train_train = utils.get_gaussian_K(sigma, xs_train, xs_train)
-    K_train_test = utils.get_gaussian_K(sigma, xs_train, xs_test)
+    K_train_train = utils.get_gaussian_K(sigma, xs_train, xs_train, nystrom=False)
+    K_train_test = utils.get_gaussian_K(sigma, xs_train, xs_test, nystrom=False)
     return get_cvxopt_KMM_ws(w_max, eps, K_train_train, K_train_test)

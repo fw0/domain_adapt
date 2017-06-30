@@ -16,20 +16,56 @@ def ortho(P):
         ans[:,j] = temp
     return ans
 
-def get_gaussian_K(sigma, xs1, xs2):
 
-    if len(xs1.shape) == 1:
-        xs1 = xs1.reshape((len(xs1),1))
+def get_gaussian_K_helper(sigma, xs1, xs2):
 
-    if len(xs2.shape) == 1:
-        xs2 = xs2.reshape((len(xs2),1))
-                
+    if False:
+        return np.dot(xs1, xs2.T)
+
     diff = xs1[:,np.newaxis,:] - xs2[np.newaxis,:,:]
     norms = np.sum(diff * diff, axis=2)
 
     K = np.exp(-1. * norms / (2 * (sigma**2)))
 
     return K
+
+
+def get_gaussian_K(sigma, xs1, xs2, nystrom=True):
+
+
+    if len(xs1.shape) == 1:
+        xs1 = xs1.reshape((len(xs1),1))
+
+    if len(xs2.shape) == 1:
+        xs2 = xs2.reshape((len(xs2),1))
+
+    if not nystrom:
+        return get_gaussian_K_helper(sigma, xs1, xs2)
+
+    else:
+                
+#        print xs1.shape, xs2.shape
+#        pdb.set_trace()
+        try:
+            assert (xs1 == xs2).all()
+        except:
+            pdb.set_trace()
+        num_cols = 50
+        total_num = len(xs1)# + len(xs2)
+#        include_prob = num_cols / float(total_num)
+#        include = np.random.uniform(size=total_num) < include_prob
+#        included = xs1[include]
+#        excluded = xs1[~include]
+#        every = total_num / num_cols
+        included = xs1[0:num_cols]
+        excluded = xs1[num_cols:]
+        W = get_gaussian_K_helper(sigma, included, included)
+        K21 = get_gaussian_K_helper(sigma, excluded, included)
+        C = np.concatenate((W, K21), axis=0)
+        eps = 0.1
+        W_inv = np.linalg.inv(W + (eps * np.eye(len(W))))
+        return (C, W_inv, C.T)
+
 
 def mat_median(m):
     l = len(m)

@@ -5,8 +5,15 @@ import pdb, itertools
 import matplotlib.pyplot as plt
 import python_utils.python_utils.basic as basic
 import utils
+
+
+class optimizer(object):
+
+    def __call__(self, *args, **kwargs):
+        return self.optimize(*args, **kwargs)
+
         
-class pymanopt_optimizer(object):
+class pymanopt_optimizer(optimizer):
 
     def __init__(self, **kwargs):
         self.options = kwargs
@@ -14,7 +21,8 @@ class pymanopt_optimizer(object):
     def optimize(self, objective, dobjective_dB, B_init):
         from pymanopt.solvers import SteepestDescent
         from pymanopt.manifolds import Stiefel
-        solver = pymanopt.solvers.SteepestDescent(**self.options)
+#        solver = pymanopt.solvers.SteepestDescent(**self.options)
+        solver = pymanopt.solvers.ConjugateGradient(**self.options)
         manifold = pymanopt.manifolds.Stiefel(B_init.shape[0], B_init.shape[1])
         from pymanopt import Problem
         problem = pymanopt.Problem(manifold=manifold, cost=objective, egrad=dobjective_dB, verbosity=2)
@@ -42,7 +50,7 @@ class pymanopt_optimizer(object):
     def final_x(self, opt_log):
         return opt_log['final_values']['x']
 
-class linesearch_optimizer(object):
+class linesearch_optimizer(optimizer):
 
     def __init__(self, maxiter=1000):
         self.maxiter = maxiter
@@ -72,10 +80,31 @@ class linesearch_optimizer(object):
         return opt_log[-1]
 
 
-class scipy_minimize_optimizer(object):
+class scalar_fxn_optimizer(optimizer):
+
+    def __init__(self, method, options={}, init_window_width=100.):
+        self.options, self.method, self.init_window_width = options, method, init_window_width
+
+    def optimize(self, objective, x_init):
+        if self.method == 'golden' or self.method == 'brent':
+            bracket = (0., x_init+self.init_window_width)
+#            bracket = (x_init-self.init_window_width, x_init+self.init_window_width)
+            result = scipy.optimize.minimize_scalar(fun=objective, bracket=bracket, method=self.method, options=self.options)
+        elif self.method == 'bounded':
+#            bounds = (x_init-self.init_window_width, x_init+self.init_window_width)
+            bounds = (0., x_init+self.init_window_width)
+            result = scipy.optimize.minimize_scalar(fun=objective, bounds=bounds, method=self.method, options=self.options)
+        print result
+        print map(objective, np.linspace(0,1,10))
+#        pdb.set_trace()
+        return result['x']
+
+
+class scipy_minimize_optimizer(optimizer):
 
     def __init__(self, method=None, options={}, verbose=False, info_f=None):
         self.method, self.options, self.verbose, self.info_f = method, options, verbose, info_f
+#        self.method = 'cg'
 
     def optimize(self, objective, dobjective_dx, x_init, bounds=None):
 #        print self.verbose
@@ -101,7 +130,7 @@ class scipy_minimize_optimizer(object):
     def final_x(self, opt_log):
         return opt_log['optimize_result']['x']
         
-class B_f_optimizer(object):
+class B_f_optimizer(optimizer):
     """
     does coordinate ascent, not "simultaneous" steps
     """
@@ -149,7 +178,7 @@ class B_f_optimizer(object):
         return opt_log['f_objective_vals'][-1]
     
     
-class multiple_optimizer(object):
+class multiple_optimizer(optimizer):
 
     def __init__(self, horse, num_tries, num_args):
         self.horse, self.num_tries, self.num_args = horse, num_tries, num_args
@@ -160,7 +189,9 @@ class multiple_optimizer(object):
         f_xs = []
         opt_logs = []
         for i in xrange(self.num_tries):
+            print 'try', i
             init_vals = tuple([init_f() for init_f in init_fs])
+            print init_vals
             x = self.horse.optimize(*(opt_args+init_vals))
             xs.append(x)
             opt_logs.append(self.horse.opt_log)
@@ -180,3 +211,36 @@ class multiple_optimizer(object):
             print 'iteration', i
             self.horse.plot_objective(_opt_log)
             
+
+class get_stuff_optimizer(optimizer):
+
+    def __init__(self, horse, get_stuff_fs, out_f):
+        self.horse, self.get_stuff_fs, self.out_f = horse, get_stuff_fs, out_f
+
+    def optimize(self, *args):
+        stuffs = [get_stuff_f(*args) for get_stuff_f in self.get_stuff_fs]
+        horse_result = self.horse(*stuffs)
+        return self.out_f(args, stuffs, horse_result)
+
+
+class many_optimizer(optimizer):
+
+    def __init__(self, optimizers):
+        self.optimizers = optimizers
+
+    def final_objective(self, opt_log):
+        return opt_log['final_objective']
+
+    def optimize(self, objective, *args):
+        import copy
+        opt_log = []
+#        while True:
+        for i in xrange(10):
+            print args
+            old_args = copy.deepcopy(args)
+            for optimizer in self.optimizers:
+                args = optimizer(*args)
+#            if converged(old_args, args):
+#                break
+        self.opt_log = {'final_objective':objective(*args)}
+        return args
