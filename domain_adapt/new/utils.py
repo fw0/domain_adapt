@@ -49,8 +49,10 @@ def get_gaussian_K(sigma, xs1, xs2, nystrom=True):
         try:
             assert (xs1 == xs2).all()
         except:
-            pdb.set_trace()
-        num_cols = 50
+            pass
+#            pdb.set_trace()
+        num_cols = 10
+#        num_cols = 50
         total_num = len(xs1)# + len(xs2)
 #        include_prob = num_cols / float(total_num)
 #        include = np.random.uniform(size=total_num) < include_prob
@@ -61,10 +63,13 @@ def get_gaussian_K(sigma, xs1, xs2, nystrom=True):
         excluded = xs1[num_cols:]
         W = get_gaussian_K_helper(sigma, included, included)
         K21 = get_gaussian_K_helper(sigma, excluded, included)
-        C = np.concatenate((W, K21), axis=0)
+        #C = np.concatenate((W, K21), axis=0)
+        C1 = get_gaussian_K_helper(sigma, xs1, included) # new
+        C2 = get_gaussian_K_helper(sigma, included, xs2) # new
         eps = 0.1
         W_inv = np.linalg.inv(W + (eps * np.eye(len(W))))
-        return (C, W_inv, C.T)
+        return (C1, W_inv, C2) # new
+#        return (C, W_inv, C.T)
 
 
 def mat_median(m):
@@ -95,7 +100,7 @@ class optimizer_logger(object):
 #        print self.verbose, self.counter, self.f
 #        print 'step', self.counter, val
         if self.verbose and ((self.counter % self.verbose) == 0):
-            print 'step', self.counter, val
+            print 'step', self.counter, val, x, np.exp(x), self.df_dx(x)
             import sys
             sys.stdout.flush()
             if not self.info_f is None:

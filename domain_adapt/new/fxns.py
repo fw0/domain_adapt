@@ -4,19 +4,21 @@ import copy, itertools, pdb
 import kmm, qp, utils, optimizers
 import scipy, scipy.optimize
 import python_utils.python_utils.basic as basic
+from autograd.core import primitive
 
 NA = np.newaxis
 
 
 class fxn(object):
 
-    def __init__(self, forward_prop=None, backward_prop=None, _val=None, _grad=None, _val_and_grad=None, _hessian_vector_product=None, **kwargs):
+    def __init__(self, forward_prop=None, backward_prop=None, _val=None, _grad=None, _val_and_grad=None, _hessian_vector_product=None, _vector_jacobian_product=None, **kwargs):
         if not (forward_prop is None): self.forward_prop = forward_prop
         if not (backward_prop is None): self.backward_prop = backward_prop
         if not (_val is None): self._val = _val
         if not (_grad is None): self._grad = _grad
         if not (_val_and_grad is None): self._val_and_grad = _val_and_grad
         if not (_hessian_vector_product is None): self._hessian_vector_product = _hessian_vector_product
+        if not (_vector_jacobian_product is None): self._vector_jacobian_product = _vector_jacobian_product
 
     def forward_prop(self, *args):
         """
@@ -64,16 +66,21 @@ class fxn(object):
     def val(self, *args):
         try:
             temps, val = self.forward_prop(*args)
+            if np.isnan(val).any():
+                pdb.set_trace()
             return val
         except NotImplementedError:
             pass
         try:
-            return self._val(*args)
+            ans = self._val(*args)
+            if np.isnan(ans).any():
+                pdb.set_trace()
         except NotImplementedError:
             pass
         try:
             val, grad = self._val_and_grad(*args)
-            return grad
+            assert False
+            return val
         except NotImplementedError:
             pass
         raise NotImplementedError
@@ -83,11 +90,13 @@ class fxn(object):
 
     @basic.timeit('grad')
     def grad(self, *args, **kwargs):
-        
+        # fix: possibly put _val_and_grad first, so that my custom forward/backward passes are called b4 autograd, like in the case of quadratic_objective
         care_argnums = kwargs.get('care_argnums', range(len(args)))
         self.check_care_argnums(args, care_argnums)
         try:
             ans = self._grad(*args, care_argnums=care_argnums)
+            if np.isnan(ans).any():
+                pdb.set_trace()
 #            print self, self._val
             return ans
         except NotImplementedError:
@@ -96,6 +105,8 @@ class fxn(object):
             pass
         try:
             val, grad = self._val_and_grad(*args, care_argnums=care_argnums)
+            if np.isnan(grad).any():
+                pdb.set_trace()
 #            print self, self._val
             return grad
         except NotImplementedError:
@@ -125,8 +136,8 @@ class fxn(object):
     def grad_check(self, *args, **kwargs):
         care_argnums = kwargs.get('care_argnums', range(len(args)))
         self.check_care_argnums(args, care_argnums)
-        #delta = 0.01
-        delta = 0.001
+        delta = 0.01
+        #delta = 0.00001
         tol = 1.
         val, anal_grad = basic.timeit('actual grad')(self.val_and_grad)(*args, care_argnums=care_argnums)
         try:
@@ -164,6 +175,16 @@ class fxn(object):
     def hessian_vector_product(self, v, p_argnum, x_argnum, *args):
         return self._hessian_vector_product(self, v, p_argnum, x_argnum, *args)
 
+    def _vector_jacobian_product(self, v, x_argnum, *args):
+        def dotted(*_args):
+            return np.dot(v, self._val(*_args))
+        return fxn.autograd_fxn(_val=dotted).grad(*args, care_argnums=(x_argnum,))
+
+#        np.sum(v[(slice(None),)+tuple([np.newaxis for i in xrange(len(p.shape))])] * self._val(*args)
+        
+    def vector_jacobian_product(self, v, x_argnum, *args):
+        return self._vector_jacobian_product(v, x_argnum, *args)
+
     def check_care_argnums(self, args, care_argnums):
         return True
 
@@ -171,10 +192,22 @@ class fxn(object):
     def autograd_fxn(cls, *args, **kwargs):
         inst = cls(*args, **kwargs)
         inst._grad = get_autograd_grad(inst.val)
-        #inst._val_and_grad = get_autograd_val_and_grad(inst.val)
+        inst._val_and_grad = get_autograd_val_and_grad(inst.val)
         return inst
 
-
+    @classmethod
+    def wrap_primitive(cls, f):
+        wrapped = primitive(f)
+        def fxn_vjps(argnum, g, ans, vs, gvs, *args):
+            return np.dot(g, f.grad(*args, care_argnums=(argnum,))) # fix: f assumed to output 1d vector
+        max_argnum = 20
+        wrapped.defvjps(fxn_vjps, range(max_argnum))
+        return wrapped
+    
+    @property
+    def __name__(self):
+        return repr(self)
+        
 def get_autograd_horse(num_args, care_argnums, f):
 
     _nocare_argnums = [i for i in range(num_args) if (not i in care_argnums)]
@@ -235,6 +268,7 @@ def weighted_lsqr_loss(B, xs, ys, ws, c, add_reg=False):
 
 
 def weighted_lsqr_b_opt(B, xs, ys, ws, c):
+#    print ws.shape, xs.shape, ys.shape
     us = np.dot(xs, B)
     ys_prime = ys * (ws**0.5)
     if len(us.shape) == 1:
@@ -242,7 +276,18 @@ def weighted_lsqr_b_opt(B, xs, ys, ws, c):
     us_prime = us * ((ws**0.5)[:,np.newaxis])
 #    pdb.set_trace()
     #c = 0.01 # fix
+    try:
+        b_opt_lsqr = np.linalg.solve(np.dot(us_prime.T, us_prime) + len(xs)*c*np.eye(us_prime.shape[1]), np.dot(us_prime.T, ys_prime))
+    except:
+        pdb.set_trace()
+#    print ws
     b_opt = np.dot(np.dot(np.linalg.inv(np.dot(us_prime.T, us_prime) + len(xs)*c*np.eye(us_prime.shape[1])), us_prime.T), ys_prime) # fix: get rid of inverse, solve linear system instead
+    #print b_opt_lsqr, b_opt
+    try:
+        assert np.linalg.norm(b_opt_lsqr-b_opt) < 0.001
+    except:
+        pdb.set_trace()
+    #pdb.set_trace()
     return b_opt
 
 
@@ -259,8 +304,11 @@ def weighted_lsqr_b_opt_given_b_logreg(B, xs_train, xs_test, ys_train, b_logreg,
     us_prime = us * ((ws**0.5)[:,np.newaxis])
 #    pdb.set_trace()
     #c = 0.01 # fix
-    b_opt = np.dot(np.dot(np.linalg.inv(np.dot(us_prime.T, us_prime) + c_lsqr*np.eye(us_prime.shape[1])), us_prime.T), ys_prime) # fix: get rid of inverse, solve linear system instead
-    return b_opt
+
+    b_opt_lsqr = np.linalg.solve(np.dot(us_prime.T, us_prime) + len(xs_train)*c_lsqr*np.eye(us_prime.shape[1]), np.dot(us_prime.T, ys_prime))
+    b_opt = np.dot(np.dot(np.linalg.inv(np.dot(us_prime.T, us_prime) + len(xs_train)*c_lsqr*np.eye(us_prime.shape[1])), us_prime.T), ys_prime) # fix: get rid of inverse, solve linear system instead
+    assert np.linalg.norm(b_opt_lsqr-b_opt) < 0.001
+    return b_opt_lsqr
 
 
 def weighted_squared_loss_given_b_opt(B, xs, ys, ws, b_opt, c, add_reg=False):
@@ -295,7 +343,7 @@ def weighted_squared_loss_given_b_opt_and_b_logreg(B, xs_train, xs_test, ys_trai
 def weight_reg_given_b_logreg(b_logreg, xs_train, xs_test, sigma, scale_sigma, B, max_ratio=5.):
     ws = b_to_logreg_ratios_wrapper(b_logreg, xs_train, xs_test, sigma, scale_sigma, B, max_ratio=5.)
     ans = np.dot(ws.T, ws) / len(xs_train)
-    print 'weight_reg', ans
+    #print 'weight_reg', ans
     return ans
 
 
@@ -356,7 +404,7 @@ def b_to_logreg_ratios_wrapper(b, xs_train, xs_test, sigma, scale_sigma, B, max_
         us = us.reshape((len(us),1))
 
     K = utils.get_gaussian_K(sigma, us, us)
-    logits = get_logits(K, b) # fix nystrom
+    logits = nystrom_dot(K, b) # fix nystrom
 
     logits_train = logits[:len(xs_train)]
     ps_train = 1 / (1+np.exp(-logits_train))
@@ -374,6 +422,63 @@ def b_to_logreg_ratios_wrapper(b, xs_train, xs_test, sigma, scale_sigma, B, max_
     return ratios_train
 
 
+def lsif_alpha_to_ratios(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio):
+    us_train = np.dot(xs_train, B)
+    us_basis = np.dot(xs_basis, B)
+    train_basis_vals = utils.get_gaussian_K(sigma, us_train, us_basis, nystrom=False)
+    ans = np.dot(train_basis_vals, lsif_alpha)
+    ans = np.maximum(0.01, ans)
+    #ans = np.maximum(0, ans)
+    ans = (ans / np.sum(ans)) * len(xs_train)
+#    print ans[0:10], 'ws'
+    if (np.isnan(ans)).any():
+        pdb.set_trace()
+#    print ans.sum(), 'sum', len(xs_train)
+#    print ans, lsif_alpha
+    return ans
+
+
+def weighted_squared_loss_given_b_opt_and_lsif_alpha(B, xs_train, xs_basis, ys_train, lsif_alpha, b_opt, c_lsqr, sigma, max_ratio=5., add_reg=False):
+
+#    scale_sigma = False
+    ws = lsif_alpha_to_ratios(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio)
+#    ws = b_to_logreg_ratios_wrapper(b_logreg, xs_train, xs_test, sigma, scale_sigma, B, max_ratio=5.)
+
+    return weighted_squared_loss_given_b_opt(B, xs_train, ys_train, ws, b_opt, c_lsqr, add_reg)
+
+
+def weighted_lsqr_b_opt_given_lsif_alpha(B, xs_train, xs_basis, ys_train, lsif_alpha, c_lsqr, sigma, max_ratio=5.):
+
+#    scale_sigma = False
+
+    ws = lsif_alpha_to_ratios(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio)
+#    ws = b_to_logreg_ratios_wrapper(b_logreg, xs_train, xs_test, sigma, scale_sigma, B, max_ratio=5.)
+
+    us = np.dot(xs_train, B)
+    ys_prime = ys_train * (ws**0.5)
+    if len(us.shape) == 1:
+        us = us.reshape((len(us),1))
+    us_prime = us * ((ws**0.5)[:,np.newaxis])
+#    pdb.set_trace()
+    #c = 0.01 # fix
+    b_opt_lsqr = np.linalg.solve(np.dot(us_prime.T, us_prime) + len(xs_train)*c_lsqr*np.eye(us_prime.shape[1]), np.dot(us_prime.T, ys_prime))
+    b_opt = np.dot(np.dot(np.linalg.inv(np.dot(us_prime.T, us_prime) + len(xs_train)*c_lsqr*np.eye(us_prime.shape[1])), us_prime.T), ys_prime) # fix: get rid of inverse, solve linear system instead
+    #print b_opt_lsqr, b_opt
+    try:
+        assert np.linalg.norm(b_opt-b_opt_lsqr) < 0.001
+    except:
+        print sigma
+        pdb.set_trace()
+    #print b_opt_lsqr, b_opt
+#    pdb.set_trace()
+    return b_opt_lsqr
+
+
+def weight_reg_given_lsif_alpha(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio):
+    ws = lsif_alpha_to_ratios(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio)
+    return np.dot(ws, ws)
+
+
 def expected_conditional_PE_dist(full_ws, ws):
     N = len(full_ws)
     assert len(full_ws) == len(ws)
@@ -383,7 +488,7 @@ def weight_reg(ws):
     return np.dot(ws, ws)
 
 
-def get_logits(K, b):
+def nystrom_dot(K, b):
     if isinstance(K, tuple):
         logits = b
         for M in reversed(K):
@@ -403,7 +508,7 @@ def logreg_loss(xs, ys, b, ws=None): # fix nystrom
     ws = np.ones(num_data) if ws is None else ws
 
     K = xs
-    logits = get_logits(xs, b)
+    logits = nystrom_dot(xs, b)
 #    pdb.set_trace()
 
     losses = np.log(1 + np.exp(-ys * logits))
@@ -420,8 +525,15 @@ def logreg_loss(xs, ys, b, ws=None): # fix nystrom
 
 class objective(fxn):
 
-    def arg_shape(self):
-        raise NotImplementedError
+    def __init__(self, _arg_shape=None, *args, **kwargs):
+        if not (_arg_shape is None):
+            self._arg_shape = _arg_shape
+        fxn.__init__(self, *args, **kwargs)
+        
+    
+    def arg_shape(self, *args):
+        return self._arg_shape(*args)
+#        raise NotImplementedError
 
 
 class logreg_ratio_objective(objective):
@@ -470,7 +582,10 @@ class quad_objective(fxn):
     def forward_prop(self, *args):
         P, q = self.Pq(*args[0:-1]) # hard
         x = args[-1] # hard
-        val = (0.5 * np.dot(x.T, np.dot(P, x))) + np.dot(q, x)
+        try:
+            val = (0.5 * np.dot(x.T, nystrom_dot(P, x))) + np.dot(q, x)
+        except:
+            pdb.set_trace()
         return (P,q), val
     
     def backward_prop(self, args, (P,q), val, care_argnums):
@@ -493,6 +608,98 @@ class quad_objective(fxn):
         return inst
             
 
+class new_kmm_objective(quad_objective):
+    
+    def _Pq(self, xs_train, xs_test, sigma, B, w_max, eps, nystrom):
+        us_train = np.dot(xs_train, B)
+        us_test = np.dot(xs_test, B)
+        if len(us_train.shape) == 1:
+            us_train = us_train.reshape((len(us_train),1))
+        if len(us_test.shape) == 1:
+            us_test = us_test.reshape((len(us_test),1))
+
+        num_train = len(us_train)
+        num_test = len(us_test)
+        K_train_train = utils.get_gaussian_K(sigma, us_train, us_train, nystrom=nystrom)
+        K_train_test = utils.get_gaussian_K(sigma, us_train, us_test, nystrom=nystrom)
+#        kappa = -(float(num_train)/num_test) * np.sum(K_train_test, axis=1)
+        kappa = -(float(num_train)/num_test) * nystrom_dot(K_train_test, np.ones(num_test))
+        return K_train_train, kappa
+
+    def Pq(self, xs_train, xs_test, sigma, B, w_max, eps):
+        return self._Pq(xs_train, xs_test, sigma, B, w_max, eps, nystrom=False)
+
+
+class nystrom_kmm_objective(new_kmm_objective):
+  
+    def Pq(self, xs_train, xs_test, sigma, B, w_max, eps):
+        # calls nystrom getter, multiplies
+        (C,W_inv,C_T), kappa = self._Pq(xs_train, xs_test, sigma, B, w_max, eps, nystrom=True)
+        return np.dot(np.dot(C,W_inv), C_T), kappa
+    
+
+def LSIF_H_h(xs_train, xs_test, xs_basis, sigma):
+#    sigma = utils.median_distance(np.concatenate((xs_train, xs_test), axis=0), np.concatenate((xs_train, xs_test), axis=0))
+#    print sigma
+#    pdb.set_trace()
+    train_basis_vals = utils.get_gaussian_K(sigma, xs_basis, xs_train, nystrom=False)
+    H = np.sum(train_basis_vals[:,np.newaxis,:] * train_basis_vals[np.newaxis,:,:], axis=2)
+    h = np.sum(utils.get_gaussian_K(sigma, xs_test, xs_basis, nystrom=False), axis=0)
+    return H, h
+
+
+def least_squares_lsif_alpha_given_B(xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg):
+#    print c_lsif, sigma
+    us_train = np.dot(xs_train, B)
+    us_test = np.dot(xs_test, B)
+    us_basis = np.dot(xs_basis, B)
+    H, h = LSIF_H_h(us_train, us_test, us_basis, sigma)
+    if add_reg:
+        H_hat = (H / len(us_train)) + (np.eye(len(H)) * c_lsif)
+    else:
+        H_hat = (H / len(us_train))
+    h_hat = h / len(us_test)
+    try:
+        lsif_alpha = np.linalg.solve(H_hat, h_hat)
+    except:
+        print c_lsif, sigma
+        pdb.set_trace()
+    if (np.isnan(lsif_alpha)).any():
+        pdb.set_trace()
+#    print lsif_alpha
+#    print 'sigma, c_lsif', sigma, c_lsif
+#    print lsif_alpha_to_ratios(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio)[0:10]
+    return lsif_alpha
+
+class LSIF_objective(quad_objective):
+
+    def Pq(self, xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg):
+        us_train = np.dot(xs_train, B)
+        us_test = np.dot(xs_test, B)
+        us_basis = np.dot(xs_basis, B)
+        H, h = LSIF_H_h(us_train, us_test, us_basis, sigma)
+        #print H
+#        print c_lsif, 'c_lsif'
+#        print H[0:3,0:10]
+        eps = 0.001
+        try:
+            if add_reg:
+                return (H / len(us_train)) + (np.eye(len(us_basis)) * (c_lsif + eps)), -h / len(us_test)
+            else:
+                return (H / len(us_train)), -h / len(us_test)
+        except:
+            print add_reg
+            pdb.set_trace()
+
+
+class single_arg_LSIF_objective(quad_objective):
+
+    def Pq(self, xs_train, xs_test, log_sigma_c_lsif, B, xs_basis, max_ratio, add_reg):
+        sigma = np.exp(np.dot(log_sigma_c_lsif, np.array([1.,0.])))
+        c_lsif = np.exp(np.dot(log_sigma_c_lsif, np.array([0.,1.])))
+        return LSIF_objective.Pq(self, xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg)
+        
+    
 class kmm_objective(quad_objective):
     
     def Pq(self, xs_train, xs_test, sigma, B):
@@ -543,12 +750,26 @@ def finite_difference_hessian_vector_product(inst, v, p_argnum, x_argnum, *args)
 def get_tight_constraints(A, b, x):
     verbose = False
     LHS = np.dot(A, x)
-    assert (LHS < b).all()
+    #print LHS, b
+    #print zip(b-LHS, LHS < b)
+#    print LHS < b
+    #print x.min(), x.max()
+    assert ( (LHS-0.01) < b).all()
     tight_eps = 0.01
     tight = (b - LHS) < tight_eps
     if verbose: print 'num_tight:', np.sum(tight)
     return A[tight], b[tight]
         
+
+def get_dx_opt_dp_direct(lin_solver, d_dp_df_dx_val, d_dx_df_dx_val, ineq_val, dineq_dx_opt_val, dineq_dp_val):
+
+    # create G matrix
+    G = np.concatenate((np.concatenate((d_dx_df_dx_val, dineq_dx_opt_val.T), axis=1), np.concatenate((f_dual_val[:,np.newaxis]*dineq_dx_opt_val, np.diag(ineq_val)), axis=1)), axis=0)
+    H = np.concatenate((d_dp_df_dx_val, dineq_dp_val), axis=0)
+    ans_pre = lin_solver(G, H)
+    x_len = len(d_dx_df_dx_val)
+    p_dim = len(d_dp_df_dx_val.shape) - 1
+    return ans[(slice(0,x_len),) + ((slice(None),) * p_dim)]
 
 def get_dx_opt_delta_p(lin_solver, d_dp_df_dx_val, P, G, h, x_opt, p, delta_p_direction):
 
@@ -576,25 +797,77 @@ def get_dx_opt_delta_p(lin_solver, d_dp_df_dx_val, P, G, h, x_opt, p, delta_p_di
     if verbose: print 'solver error:', np.linalg.norm(np.dot(C,deriv) - d)
 
     return deriv
-        
 
-class opt(fxn):
 
-    def __init__(self, lin_solver, objective, dobjective_dx):
-        self.lin_solver, self.objective, self.dobjective_dx = lin_solver, objective, dobjective_dx
+class ineq_constraints(fxn):
+    pass
+
+
+class Gh_ineq_constraints(ineq_constraints):
+
+    def __init__(self, _get_Gh, **kwargs):
+        self._get_Gh = _get_Gh
+        ineq_constraints.__init__(self, **kwargs)
+#        self._G, self._h = _G, _h
 
     def get_Gh(self, *args):
-        raise NotImplementedError
+        return self._get_Gh(*args)
+#        return self.G(*args), self.h(*args)
+    
+    def _val(self, *args):
+        # accepts 1 more argument than get_Gh
+        G,h = self.get_Gh(*args[:-1])
+        x = args[-1]
+        return np.dot(G,x) - h
+#        return self.G(*args) - self.h(*args)
+
+
+class constant_Gh_ineq_constraints(Gh_ineq_constraints):
+
+    def _vector_jacobian_product(self, v, x_argnum, *args):
+        return np.zeros(args[x_argnum].shape)
+    
+
+class unconstrained_ineq_constraints(constant_Gh_ineq_constraints):
+
+    def __init__(self, num_vars):
+        self.num_vars = num_vars
+
+    def _val(self, *args):
+        return np.zeros((len(args[-1]),0))
+        
+#    def _get_Gh(self, *args):
+#        x_len = args
+#        return np.zeros(shape=(0,x_len)), np.zeros(shape=(0,))
+#        return np.zeros(shape=(0,self.num_args)), np.zeros(shape=(0,))
+    
+    
+class opt(fxn):
+
+    def __init__(self, lin_solver, objective, dobjective_dx, ineq_constraints=None, direct=True):
+        self.lin_solver, self.objective, self.dobjective_dx, self.direct = lin_solver, objective, dobjective_dx, direct
+        if not (ineq_constraints is None):
+            self.ineq_constraints = ineq_constraints
 
     def backward_prop(self, args, _, val, care_argnums):
         num_args = len(args)
         self.check_care_argnums(args, care_argnums) # special
         #p = args[-1]
         p = args[care_argnums[0]]
-        G,h = self.get_Gh(*args)
+        #G,h = self.ineq_constraints.get_Gh(*args)
         #d_dp_df_dx_val = self.dobjective_dx.grad(*(args+(val,)), care_argnums=(num_args-1,)) # hardcoded - should be able to take grad wrt to other arguments
-        d_dp_df_dx_val = self.dobjective_dx.grad(*(args+(val,)), care_argnums=care_argnums) # hardcoded - should be able to take grad wrt to other arguments
-        d_dx_df_dx_val = self.dobjective_dx.grad(*(args+(val,)), care_argnums=(num_args,))
+
+        if self.direct:
+            d_dp_df_dx_val = self.dobjective_dx.grad(*(args+(val,)), care_argnums=care_argnums) # hardcoded - should be able to take grad wrt to other arguments
+            d_dx_df_dx_val = self.dobjective_dx.grad(*(args+(val,)), care_argnums=(num_args,))
+
+            ineq_val = self.ineq_constraints(*(args+(val,)))
+            dineq_dx_opt_val = self.ineq_constraints.grad(*(args+(val,)), care_argnums=(num_args,))
+            dineq_dp_val = self.ineq_constraints.grad(*(args+(val,)), care_argnums=care_argnums)
+
+            return get_dx_opt_dp_direct(lin_solver, d_dp_df_dx_val, d_dx_df_dx_val, ineq_val, dineq_dx_opt_val, dineq_dp_val)
+        else:
+            raise NotImplementedError
         
         ans = np.zeros(val.shape + p.shape)
     
@@ -610,16 +883,22 @@ class opt(fxn):
         assert len(care_argnums) == 1
         #assert care_argnums == (len(args)-1,)
 
-class cvx_opt(opt):
 
+        
+class cvx_opt(opt):
+    """
+    unconstrained
+    """
 #    def __init__(self, lin_solver, objective, dobjective_dx, optimizer=optimizers.scipy_minimize_optimizer(options={'maxiter':10})):
 #    def __init__(self, lin_solver, objective, dobjective_dx, optimizer=optimizers.scipy_minimize_optimizer()): # FIX
     def __init__(self, lin_solver, objective, dobjective_dx, optimizer=optimizers.scipy_minimize_optimizer(options={'disp':False,'maxiter':1}), warm_start=True): # FIX
         self.optimizer, self.warm_start = optimizer, warm_start
         opt.__init__(self, lin_solver, objective, dobjective_dx)
 
-    def get_Gh(self, *args):
-        return np.zeros(shape=(0,self.objective.arg_shape(*args)[0])), np.zeros(shape=(0,))
+    @property
+    def ineq_constraints(self):
+        return unconstrained_ineq_constraints(self.objective.arg_shape(*args)[0])
+#        return np.zeros(shape=(0,self.objective.arg_shape(*args)[0])), np.zeros(shape=(0,))
     
     def forward_prop(self, *args):
         f = lambda x: self.objective.val(*(args + (x,)))
@@ -640,7 +919,8 @@ class cvx_opt(opt):
         #logger.plot()
 #        print ans['x'], 'hhhhhhhh'
 #        print ans
-        return None, val
+        return (None,(None,None)), val
+#        return None, val
         
         
 class full_quad_opt(opt):
@@ -648,12 +928,65 @@ class full_quad_opt(opt):
     assumes objective fxn being maximized is quadratic and parameterized by the full quadratic term matrix
     cvxopt us used to maximize the objective
     """
-    def forward_prop(self, *args):
-        P, q = self.objective.Pq(*args)
-        G, h = self.get_Gh(*args)
-        return (P,q,G,h), qp.cvxopt_solver(P, q, G, h) # fix: can add dual optimal variables here
+    def __init__(self, lin_solver, objective, dobjective_dx, ineq_constraints, warm_start=True):
+        self.warm_start = warm_start
+        opt.__init__(self, lin_solver, objective, dobjective_dx, ineq_constraints)
 
-    
+    def forward_prop(self, *args):
+        # fix: add warm_start
+        P, q = self.objective.Pq(*args) # fix: if cholesky/nystrom, this will return the factorized matrix, solver will accept these
+        G, h = self.ineq_constraints.get_Gh(*args)
+        #print 'G'
+        #print G[-4:,:]
+        #print 'h'
+        #print h[-4:]
+#        pdb.set_trace()
+        if self.warm_start:
+            try:
+                init_x, init_ineq_dual_val = self.old_x, self.old_ineq_dual_val
+#                pdb.set_trace()
+                from cvxopt import matrix
+                try:
+                    primal_val, eq_dual_val, ineq_dual_val = qp.cvxopt_solver(P, q, G, h, initvals={'x':matrix(init_x), 'z':matrix(init_ineq_dual_val)})
+                except:
+                    print P
+                    pdb.set_trace()
+            except AttributeError:
+                primal_val, eq_dual_val, ineq_dual_val = qp.cvxopt_solver(P, q, G, h)
+            self.old_x, self.old_ineq_dual_val = primal_val, ineq_dual_val
+        else:
+            primal_val, eq_dual_val, ineq_dual_val = qp.cvxopt_solver(P, q, G, h)
+        return ((P,q,G,h),(eq_dual_val,ineq_dual_val)), primal_val # fix: can add dual optimal variables here
+
+
+def kmm_get_Gh(xs_train, xs_test, sigma, B, w_max, eps):
+    return kmm.get_kmm_Gh(w_max, eps, len(xs_train), len(xs_test))
+
+
+def LSIF_get_Gh(xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio):
+    num_bases = len(xs_basis)
+    G_pre, h_pre = -1. * np.eye(num_bases), np.zeros(num_bases)
+#    return G_pre, h_pre
+    us_train = np.dot(xs_train, B)
+    us_basis = np.dot(xs_basis, B)
+    train_basis_vals = utils.get_gaussian_K(sigma, us_train, us_basis, nystrom=False)
+#    print train_basis_vals[0:5,0:20]
+#    pdb.set_trace()
+    eps = 0.001
+    summed_basis_vals = np.sum(train_basis_vals, axis=0)
+    #print 'summed'
+    #print summed_basis_vals
+    G_post = np.array([summed_basis_vals, -summed_basis_vals])
+    #G_post = np.array([summed_basis_vals])
+    #G_post = np.array([-summed_basis_vals])
+    h_post = np.array([len(us_train) + eps, -(len(us_train) - eps)])
+    #h_post = np.array([(len(us_train) + eps),])
+    #h_post = np.array([-(len(us_train) + eps),])
+    #print 'G_post'
+    #print G_post
+    return np.concatenate((G_pre,G_post), axis=0), np.concatenate((h_pre,h_post))
+
+        
 class full_ws_opt_given_B(full_quad_opt):
 
     def __init__(self, w_max, eps, lin_solver, kmm_objective, dkmm_objective_dws):
@@ -697,8 +1030,19 @@ def get_dg_dp_thru_x_opt(lin_solver, d_dp_df_dx_val, dg_dx_opt_val, P, G, h, x_o
 
 
 @basic.timeit('thru')
-def get_dg_dp_thru_x_opt_new(lin_solver, objective_hessian_vector_product, dg_dx_opt_val, G, h, f_args, f_val, care_argnum_in_f_args, g_args):
+#def get_dg_dp_thru_x_opt_new(lin_solver, objective_hessian_vector_product, dg_dx_opt_val, G, h, f_args, f_val, f_dual_val, care_argnum_in_f_args, g_args, Gh_vector_jacobian_product):
+def get_dg_dp_thru_x_opt_new(lin_solver, objective_hessian_vector_product, dg_dx_opt_val, ineq_val, dineq_dx_opt_val, f_args, f_val, f_dual_val, care_argnum_in_f_args, g_args, ineq_vector_jacobian_product):
 
+    #print f_val
+
+    #print 'ineq_val'
+    #print ineq_val
+    #print 'f_dual_val'
+    #print f_dual_val
+    #print 'dineq_dx_opt_val'
+    #print dineq_dx_opt_val[-4:,:]
+#    pdb.set_trace()
+    
     p = f_args[care_argnum_in_f_args]
 
     verbose = False
@@ -706,22 +1050,32 @@ def get_dg_dp_thru_x_opt_new(lin_solver, objective_hessian_vector_product, dg_dx
     # assumes L(x_opt), x_opt = argmin_x f(x,p) subject to Ax<=b
     
     # get tight constraints
-    G_tight, h_tight = get_tight_constraints(G, h, f_val)
-    num_tight = G_tight.shape[0]
+    #G_tight, h_tight = get_tight_constraints(G, h, f_val)
+    #num_tight = G_tight.shape[0]
 
     # make C matrix
     #C = np.vstack((np.hstack((P,G_tight.T)), np.hstack((G_tight,np.zeros((num_tight,num_tight))))))
 
     # make function that computes C*v
     x_argnum_in_f_args = len(f_args)
-    C_size = (len(f_val) + G_tight.shape[0])
+    C_size = (len(f_val) + ineq_val.shape[0])
+    #print dineq_dx_opt_val
+    #print f_dual_val
     def Cu_f(u):
         assert len(u) == C_size
         u_pre, u_post = u[0:len(f_val)], u[len(f_val):]
         Cu_pre = objective_hessian_vector_product(u_pre, x_argnum_in_f_args, x_argnum_in_f_args, *(f_args+(f_val,)))
-        Cu_pre += np.dot(G_tight.T, u_post)
-        Cu_post = np.dot(G_tight, u_pre)
+#        Cu_pre += np.dot(G_tight.T, u_post)
+        #Cu_pre += np.dot(G.T, u_post)
+        Cu_pre += np.dot((f_dual_val[:,np.newaxis] * dineq_dx_opt_val).T, u_post)
+        #Cu_post = np.dot(G_tight, u_pre)
+#        Cu_post = np.dot(f_dual_val[:,np.newaxis] * dineq_dx_opt_val, u_pre) # new
+        Cu_post = np.dot(dineq_dx_opt_val, u_pre) # new
+        #Cu_post += (np.dot(G,f_val) - h) * u_post # new
+        Cu_post += ineq_val * u_post # new
         Cu = np.concatenate((Cu_pre, Cu_post), axis=0)
+#        print Cu
+#        pdb.set_trace()
         return Cu
         
     from scipy.sparse.linalg import LinearOperator
@@ -734,19 +1088,31 @@ def get_dg_dp_thru_x_opt_new(lin_solver, objective_hessian_vector_product, dg_dx
 #    pdb.set_trace()
     
     # make d vector
-    d = np.hstack((dg_dx_opt_val, np.zeros(num_tight)))
+    #d = np.hstack((dg_dx_opt_val, np.zeros(num_tight)))
+    d = np.hstack((dg_dx_opt_val, np.zeros(ineq_val.shape[0]))) 
 
     # solve Cv=d for x
     v = lin_solver(C, d)
-    if verbose: print 'solver error:', np.linalg.norm(np.dot(C,v) - d)
+    if verbose: print 'solver error:', np.linalg.norm(C(v) - d)
 #    pdb.set_trace()
 
     # calculate D.T * v
     v_pre = v[0:len(f_val)]
-    return -objective_hessian_vector_product(v_pre, care_argnum_in_f_args, x_argnum_in_f_args, *(f_args+(f_val,)))
+    v_post = v[len(f_val):]
+    ans1 = (-objective_hessian_vector_product(v_pre, care_argnum_in_f_args, x_argnum_in_f_args, *(f_args+(f_val,))))
+    ans2 = -ineq_vector_jacobian_product(v_post*f_dual_val, care_argnum_in_f_args, *(f_args+(f_val,)))
+    #print 'ans1'
+    #print ans1
+    #print 'ans2'
+    #print ans2
+#    if not (Gh_vector_jacobian_product is None):
+#        ans += Gh_vector_jacobian_product(v_post, care_argnum_in_f_args, *f_args)
+    return ans1 + ans2
+
 
     # make D
-    D = np.vstack((-d_dp_df_dx_val, np.zeros((num_tight,)+p.shape)))
+    #D = np.vstack((-d_dp_df_dx_val, np.zeros((num_tight,)+p.shape)))
+    D = np.vstack((-d_dp_df_dx_val, np.zeros((G.shape[0],)+p.shape))) # new
 
     return np.sum(D.T * v[tuple([np.newaxis for i in xrange(len(p.shape))])+(slice(None),)], axis=-1).T
 
@@ -835,27 +1201,76 @@ class two_step(fxn):
         self.g_val_h_argnum = len(self.h_argnums) if g_val_h_argnum is None else g_val_h_argnum
 
     def g_args(self, *args):
-        def shape(x):
-            try:
-                return x.shape
-            except:
-                return 'NA'
-#        print self.g._val, len(args), self.g_argnums, [x for x in enumerate(map(shape,args))]
-        return tuple([args[i] for i in self.g_argnums])
+
+        def get(key):
+            if isinstance(key, tuple):
+                i, f = key
+                return f(args[i])
+            else:
+                return args[key]
+
+        return map(get, self.g_argnums)
+        
+#        try:
+#            return tuple([args[i] for i in self.g_argnums])
+#        except:
+#            pdb.set_trace()
 
     def h_args(self, g_val, *args):
-        l = [args[i] for i in self.h_argnums]
-        l.insert(self.g_val_h_argnum, g_val)
+
+        def get(key):
+            if isinstance(key, tuple):
+                i, f = key
+                return f(args[i])
+            else:
+                return args[key]
+
+        l = map(get, self.h_argnums)
+
+        def pos(key):
+            if isinstance(key, tuple):
+                i, f = key
+                return i
+            else:
+                return key
+
+        try:
+            sorted_keys = sorted(self.g_val_h_argnum, key=pos, reverse=True)
+        except TypeError:
+            sorted_keys = [self.g_val_h_argnum]
+
+        def g_val_key(key):
+            if isinstance(key,tuple):
+                pos, f = key
+                return f(g_val)
+            else:
+                return g_val
+            
+        for key in sorted_keys:
+            l.insert(pos(key), g_val_key(key))
+
         return tuple(l)
+        
+#        l = [args[i] for i in self.h_argnums]
+#        l.insert(self.g_val_h_argnum, g_val)
+#        return tuple(l)
     
     def forward_prop(self, *args):
         g_args = self.g_args(*args)
+#        try:
         g_stuff, g_val = self.g.forward_prop(*g_args)
-        h_args = self.h_args(g_val, *args)
+#        except:
+#            pdb.set_trace()
+        try:
+            h_args = self.h_args(g_val, *args)
+        except:
+            pdb.set_trace()
         h_stuff, h_val = self.h.forward_prop(*h_args)
         return (g_val, (g_stuff, h_stuff)), h_val
 
     def two_step_grad(self, args, (g_val,(g_stuff,h_stuff)), h_val, care_argnums):
+        pdb.set_trace()
+        assert False
         p = args[care_argnums[0]]
         if care_argnums[0] in self.g_argnums:
             care_argnum_in_g_args = list(self.g_argnums).index(care_argnums[0])
@@ -876,7 +1291,7 @@ class two_step(fxn):
         
         self.check_care_argnums(args, care_argnums) # special
         p = args[care_argnums[0]]
-        dh_dg_dg_dp_val = self.two_step_grad(args, (g_val,), h_val, care_argnums)
+        dh_dg_dg_dp_val = self.two_step_grad(args, (g_val,(g_stuff,h_stuff)), h_val, care_argnums)
 #        pdb.set_trace()
         if care_argnums[0] in self.h_argnums:
             care_argnum_in_h_args = list(self.h_argnums).index(care_argnums[0])
@@ -981,6 +1396,7 @@ class g_thru_f_opt_new(two_step):
 
     @basic.timeit('new two_step_grad')
     def two_step_grad(self, args, (g_val,(g_stuff,h_stuff)), h_val, care_argnums):
+        _, (g_eq_dual_val,g_ineq_dual_val) = g_stuff
         p = args[care_argnums[0]]
         if care_argnums[0] in self.g_argnums:
             care_argnum_in_g_args = list(self.g_argnums).index(care_argnums[0])
@@ -1002,9 +1418,11 @@ class g_thru_f_opt_new(two_step):
 #            d_dx_df_dx_val = three(self.g.dobjective_dx.grad, g_args, g_val)
             
             #P, q = self.full_quad_opt.objective.Pq(*quad_args)
-            G, h = self.g.get_Gh(*g_args)
+            #G, h = self.g.get_Gh(*g_args)
 #            pdb.set_trace()
-            dh_dg_dg_dp_val = basic.timeit('get_dg_dp_thru_x_opt_new')(get_dg_dp_thru_x_opt_new)(self.g.lin_solver, self.g.objective.hessian_vector_product, dh_dxopt_val, G, h, g_args, g_val, care_argnum_in_g_args, h_args)
+            ineq_val = self.g.ineq_constraints(*(g_args+(g_val,)))
+            dineq_dx_opt_val = self.g.ineq_constraints.grad(*(g_args+(g_val,)), care_argnums=(len(g_args),))
+            dh_dg_dg_dp_val = basic.timeit('get_dg_dp_thru_x_opt_new')(get_dg_dp_thru_x_opt_new)(self.g.lin_solver, self.g.objective.hessian_vector_product, dh_dxopt_val, ineq_val, dineq_dx_opt_val, g_args, g_val, g_ineq_dual_val, care_argnum_in_g_args, h_args, self.g.ineq_constraints.vector_jacobian_product)
         else:
             dh_dg_dg_dp_val = np.zeros(p.shape)
 

@@ -15,17 +15,17 @@ class optimizer(object):
         
 class pymanopt_optimizer(optimizer):
 
-    def __init__(self, **kwargs):
-        self.options = kwargs
+    def __init__(self, problem_verbosity=1, **kwargs):
+        self.options, self.problem_verbosity = kwargs, problem_verbosity
     
     def optimize(self, objective, dobjective_dB, B_init):
         from pymanopt.solvers import SteepestDescent
         from pymanopt.manifolds import Stiefel
-#        solver = pymanopt.solvers.SteepestDescent(**self.options)
-        solver = pymanopt.solvers.ConjugateGradient(**self.options)
+        solver = pymanopt.solvers.SteepestDescent(**self.options)
+        #solver = pymanopt.solvers.ConjugateGradient(**self.options)
         manifold = pymanopt.manifolds.Stiefel(B_init.shape[0], B_init.shape[1])
         from pymanopt import Problem
-        problem = pymanopt.Problem(manifold=manifold, cost=objective, egrad=dobjective_dB, verbosity=2)
+        problem = pymanopt.Problem(manifold=manifold, cost=objective, egrad=dobjective_dB, verbosity=self.problem_verbosity)
         B_fit, self.opt_log = solver.solve(problem, x=B_init)
         return B_fit
 
@@ -87,15 +87,16 @@ class scalar_fxn_optimizer(optimizer):
 
     def optimize(self, objective, x_init):
         if self.method == 'golden' or self.method == 'brent':
-            bracket = (0., x_init+self.init_window_width)
+            bracket = (0.01, x_init+self.init_window_width)
 #            bracket = (x_init-self.init_window_width, x_init+self.init_window_width)
             result = scipy.optimize.minimize_scalar(fun=objective, bracket=bracket, method=self.method, options=self.options)
         elif self.method == 'bounded':
 #            bounds = (x_init-self.init_window_width, x_init+self.init_window_width)
-            bounds = (0., x_init+self.init_window_width)
+            eps = 0.1 # fix
+            bounds = (eps, x_init+self.init_window_width)
             result = scipy.optimize.minimize_scalar(fun=objective, bounds=bounds, method=self.method, options=self.options)
-        print result
-        print map(objective, np.linspace(0,1,10))
+        #print result
+        #print map(objective, np.linspace(0,1,10))
 #        pdb.set_trace()
         return result['x']
 
@@ -191,14 +192,14 @@ class multiple_optimizer(optimizer):
         for i in xrange(self.num_tries):
             print 'try', i
             init_vals = tuple([init_f() for init_f in init_fs])
-            print init_vals
+            #print init_vals
             x = self.horse.optimize(*(opt_args+init_vals))
             xs.append(x)
             opt_logs.append(self.horse.opt_log)
             f_x = self.horse.final_objective(self.horse.opt_log)
             f_xs.append(f_x)
-        best_try = np.argmin(f_xs)
-        assert np.min(f_xs) == f_xs[best_try]
+        best_try = np.nanargmin(f_xs)
+        assert np.nanmin(f_xs) == f_xs[best_try]
         self.opt_log = {'opt_logs':opt_logs, 'final_objective':f_xs[best_try]}
         #print zip(xs, f_xs)
         return xs[best_try]
@@ -212,6 +213,28 @@ class multiple_optimizer(optimizer):
             self.horse.plot_objective(_opt_log)
             
 
+class grid_search_optimizer(optimizer):
+
+    def optimize(self, objective, ranges):
+        d = []
+        for args in itertools.product(*ranges):
+#            print args, 'grid', ranges
+            d.append((args, objective(*args)))
+        best_args, best_val = min(d, key=lambda (args, val): val)
+        #print d
+        import pandas as pd
+        from IPython.display import display_pretty, display_html
+#        display_html(pd.DataFrame.from_records(d).to_html(), raw=True)
+        print best_args, best_val, 'best'
+        self.opt_log = ((best_args, best_val), d)
+        return best_args
+        
+    def final_objective(self, ((best_args, best_val), d)):
+        return best_args
+
+    def plot_objective(self,  ((best_args, best_val), d)):
+        print d
+            
 class get_stuff_optimizer(optimizer):
 
     def __init__(self, horse, get_stuff_fs, out_f):
@@ -225,8 +248,8 @@ class get_stuff_optimizer(optimizer):
 
 class many_optimizer(optimizer):
 
-    def __init__(self, optimizers):
-        self.optimizers = optimizers
+    def __init__(self, optimizers, num_cycles=5):
+        self.optimizers, self.num_cycles = optimizers, num_cycles
 
     def final_objective(self, opt_log):
         return opt_log['final_objective']
@@ -235,11 +258,13 @@ class many_optimizer(optimizer):
         import copy
         opt_log = []
 #        while True:
-        for i in xrange(10):
-            print args
+        for i in xrange(self.num_cycles):
+#            print args
             old_args = copy.deepcopy(args)
             for optimizer in self.optimizers:
+                #print 'result before', args
                 args = optimizer(*args)
+                #print 'result after', args
 #            if converged(old_args, args):
 #                break
         self.opt_log = {'final_objective':objective(*args)}

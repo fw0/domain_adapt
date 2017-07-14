@@ -1,9 +1,10 @@
 import numpy as np
 import scipy
 import cvxopt
+import pdb
 
 
-def cvxopt_solver(P, q, G, h):
+def cvxopt_solver(P, q, G, h, initvals={}):
 
     from cvxopt import solvers
     solvers.options['show_progress'] = False
@@ -12,11 +13,16 @@ def cvxopt_solver(P, q, G, h):
                   cvxopt.matrix(q,tc='d'),\
                   cvxopt.matrix(G,tc='d'),\
                   cvxopt.matrix(h,tc='d'),\
+                  initvals=initvals
 #                  show_progress=False,\
                   )
-    xs = np.array(ans['x'])[:,0]
+    xs = np.array(ans['x'])[:,0] # fix: return primal, dual eq variable, dual ineq variables
+    eq_dual_val = np.array(ans['y'])[:,0]
+    ineq_dual_val = np.array(ans['z'])[:,0]
+    
+#    pdb.set_trace()
 
-    return xs
+    return xs, eq_dual_val, ineq_dual_val
 
 
 def primal_dual_qp(eps, eps_primal, eps_dual, G, h, l, u, A, b):
