@@ -5,9 +5,9 @@ import python_utils.python_utils.caching as caching
 def get_oos_loss(which_loss, num_folds, use_test, fitter, xs_train, xs_test, ys_train, ys_test=None):
     
     if which_loss == 'square':
-        loss = lambda predicted_ys, ys: np.sum((ys-predicted_ys)**2)
+        loss = lambda predicted_ys, ys: np.sum((ys-predicted_ys)**2) / len(ys)
     elif which_loss == '0-1':
-        loss = lambda predicted_ys, ys: np.sum((2 * ((predicted_ys > 0.5).astype(int) - 0.5)) == ys)
+        loss = lambda predicted_ys, ys: np.sum((2 * ((predicted_ys > 0.5).astype(int) - 0.5)) == ys) / len(ys)
         
     if num_folds > 0:
         losses = []
@@ -35,7 +35,9 @@ def get_oos_loss(which_loss, num_folds, use_test, fitter, xs_train, xs_test, ys_
         assert use_test
         predictor = fitter(xs_train, xs_test, ys_train)
         predicted_ys_test = np.array(map(predictor, xs_test))
-        return [loss(predicted_ys_test, ys_test)]
+        ans = loss(predicted_ys_test, ys_test)
+        print ans
+        return ans
 
 
 class cv_fitter(object):
@@ -56,6 +58,7 @@ class cv_fitter(object):
             best_fitter = min(d, key=lambda (fitter, mean): mean)[0]
         else:
             best_fitter = min(d, key=lambda (fitter, (mean, std, vals)): mean)[0]
+#        print 'best loss', min(d, key=lambda (fitter, mean): mean)[1]
         caching.fig_archiver.log_text(d)
         caching.fig_archiver.log_text('best:', best_fitter.__dict__)
         self.opt_log = d
