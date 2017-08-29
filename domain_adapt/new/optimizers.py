@@ -15,7 +15,7 @@ class optimizer(object):
         
 class pymanopt_optimizer(optimizer):
 
-    def __init__(self, problem_verbosity=1, **kwargs):
+    def __init__(self, problem_verbosity=0, **kwargs):
         self.options, self.problem_verbosity = kwargs, problem_verbosity
     
     def optimize(self, objective, dobjective_dB, B_init):
@@ -113,7 +113,8 @@ class scipy_minimize_optimizer(optimizer):
 #        print self.verbose, 'gggg'
         logger = utils.optimizer_logger(objective, dobjective_dx, self.verbose, self.info_f)
 #        logger = utils.optimizer_logger(objective, dobjective_dx, self.verbose, self.info_f)
-        logger.l.append({'f':objective(x_init), 'grad_norm':np.linalg.norm(dobjective_dx(x_init))})
+#        pdb.set_trace()
+        logger.l.append({'f':objective(x_init)})#, 'grad_norm':np.linalg.norm(dobjective_dx(x_init))})
         ans = scipy.optimize.minimize(fun=objective, x0=x_init, jac=dobjective_dx, method=self.method, options=self.options, callback=logger, bounds=bounds)
         self.opt_log = {'logger':logger, 'optimize_result':ans}
         return ans['x']
@@ -190,7 +191,8 @@ class multiple_optimizer(optimizer):
         f_xs = []
         opt_logs = []
         for i in xrange(self.num_tries):
-            print 'try', i
+            np.random.seed(i)
+            #print 'try', i
             init_vals = tuple([init_f() for init_f in init_fs])
             #print init_vals
             x = self.horse.optimize(*(opt_args+init_vals))
@@ -199,6 +201,8 @@ class multiple_optimizer(optimizer):
             f_x = self.horse.final_objective(self.horse.opt_log)
             f_xs.append(f_x)
         best_try = np.nanargmin(f_xs)
+        print 'multiple', f_xs
+        print 'best val', f_xs[best_try]
         assert np.nanmin(f_xs) == f_xs[best_try]
         self.opt_log = {'opt_logs':opt_logs, 'final_objective':f_xs[best_try]}
         #print zip(xs, f_xs)
@@ -218,14 +222,14 @@ class grid_search_optimizer(optimizer):
     def optimize(self, objective, ranges):
         d = []
         for args in itertools.product(*ranges):
-#            print args, 'grid', ranges
+#            print args, 'grid'
             d.append((args, objective(*args)))
         best_args, best_val = min(d, key=lambda (args, val): val)
         #print d
         import pandas as pd
         from IPython.display import display_pretty, display_html
 #        display_html(pd.DataFrame.from_records(d).to_html(), raw=True)
-        print best_args, best_val, 'best'
+#        print best_args, best_val, 'best'
         self.opt_log = ((best_args, best_val), d)
         return best_args
         
