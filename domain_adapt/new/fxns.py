@@ -2,12 +2,27 @@ import autograd.numpy as np
 import autograd
 import copy, itertools, pdb
 import kmm, qp, utils, optimizers
-import scipy, scipy.optimize
+import scipy.optimize, scipy
+#from scipy.optimize import optimize
+#import autograd.scipy as scipy
 import python_utils.python_utils.basic as basic
 from autograd.core import primitive
 
 NA = np.newaxis
 
+@primitive
+def logsumexp(x):
+    """Numerically stable log(sum(exp(x)))"""
+    max_x = np.max(x)
+    return max_x + np.log(np.sum(np.exp(x - max_x)))
+
+def logsumexp_vjp(g, ans, vs, gvs, x):
+    return np.full(x.shape, g) * np.exp(x - np.full(x.shape, ans))
+
+logsumexp.defvjp(logsumexp_vjp)
+
+def project(xs, B):
+    return np.concatenate((np.dot(xs,B), np.ones((len(xs),1))), axis=1)
 
 class fxn(object):
 
@@ -76,10 +91,11 @@ class fxn(object):
             if np.isnan(ans).any():
                 pdb.set_trace()
         except NotImplementedError:
-            pass
+            assert False
         try:
             val, grad = self._val_and_grad(*args)
-            assert False
+            pdb.set_trace()
+#            assert False
             return val
         except NotImplementedError:
             pass
@@ -203,6 +219,9 @@ class fxn(object):
         max_argnum = 20
         wrapped.defvjps(fxn_vjps, range(max_argnum))
         return wrapped
+
+    def __repr__(self):
+        return str(self.__class__) + str(self.__dict__)
     
     @property
     def __name__(self):
@@ -269,26 +288,44 @@ def weighted_lsqr_loss(B, xs, ys, ws, c, add_reg=False):
 
 def weighted_lsqr_b_opt(B, xs, ys, ws, c):
 #    print ws.shape, xs.shape, ys.shape
-    us = np.dot(xs, B)
+    us = project(xs, B)
     ys_prime = ys * (ws**0.5)
     if len(us.shape) == 1:
         us = us.reshape((len(us),1))
     us_prime = us * ((ws**0.5)[:,np.newaxis])
 #    pdb.set_trace()
     #c = 0.01 # fix
+    I_minus = np.diag(np.concatenate((np.ones(us.shape[1]-1), np.zeros(1))))
     try:
-        b_opt_lsqr = np.linalg.solve(np.dot(us_prime.T, us_prime) + len(xs)*c*np.eye(us_prime.shape[1]), np.dot(us_prime.T, ys_prime))
+#        b_opt_lsqr = np.linalg.solve(np.dot(us_prime.T, us_prime) + len(xs)*c*np.eye(us_prime.shape[1]), np.dot(us_prime.T, ys_prime))
+        b_opt_lsqr = np.linalg.solve(np.dot(us_prime.T, us_prime) + len(xs)*c*I_minus, np.dot(us_prime.T, ys_prime))
     except:
         pdb.set_trace()
 #    print ws
-    b_opt = np.dot(np.dot(np.linalg.inv(np.dot(us_prime.T, us_prime) + len(xs)*c*np.eye(us_prime.shape[1])), us_prime.T), ys_prime) # fix: get rid of inverse, solve linear system instead
+    #b_opt = np.dot(np.dot(np.linalg.inv(np.dot(us_prime.T, us_prime) + len(xs)*c*np.eye(us_prime.shape[1])), us_prime.T), ys_prime) # fix: get rid of inverse, solve linear system instead
     #print b_opt_lsqr, b_opt
-    try:
-        assert np.linalg.norm(b_opt_lsqr-b_opt) < 0.001
-    except:
-        pdb.set_trace()
+    #try:
+    #    assert np.linalg.norm(b_opt_lsqr-b_opt) < 0.001
+    #except:
+    #    pdb.set_trace()
     #pdb.set_trace()
-    return b_opt
+    return b_opt_lsqr
+
+def ll_given_b_opt_ll(b_opt_ll, losses, xs_train, B):
+    error = np.dot(project(xs_train,B), b_opt_ll) - losses
+#    error = np.dot(xs_train, np.dot(B, b_opt_ll)) - losses
+    return np.dot(error, error) / len(losses)
+    
+
+def unweighted_lsqr_b_opt(B, xs, ys, c):
+    us = project(xs, B)
+    if len(us.shape) == 1:
+        us = us.reshape((len(us),1))
+    #print xs.shape
+    I_minus = np.diag(np.concatenate((np.ones(us.shape[1]-1), np.zeros(1))))
+    b_opt_lsqr = basic.timeit('solve')(np.linalg.solve)(np.dot(us.T, us) + len(xs)*c*I_minus, np.dot(us.T, ys))
+#    print b_opt_lsqr
+    return b_opt_lsqr
 
 
 def weighted_lsqr_b_opt_given_b_logreg(B, xs_train, xs_test, ys_train, b_logreg, c_lsqr, sigma, scale_sigma, max_ratio=5.):
@@ -297,7 +334,7 @@ def weighted_lsqr_b_opt_given_b_logreg(B, xs_train, xs_test, ys_train, b_logreg,
 
     ws = b_to_logreg_ratios_wrapper(b_logreg, xs_train, xs_test, sigma, scale_sigma, B, max_ratio=5.)
 
-    us = np.dot(xs_train, B)
+    us = project(xs_train, B)
     ys_prime = ys_train * (ws**0.5)
     if len(us.shape) == 1:
         us = us.reshape((len(us),1))
@@ -312,7 +349,7 @@ def weighted_lsqr_b_opt_given_b_logreg(B, xs_train, xs_test, ys_train, b_logreg,
 
 
 def weighted_squared_loss_given_b_opt(B, xs, ys, ws, b_opt, c, add_reg=False):
-    us = np.dot(xs, B)
+    us = project(xs, B)
     if len(us.shape) == 1:
         us = us.reshape((len(us),1))
     ys_hat = np.dot(us, b_opt)
@@ -331,7 +368,7 @@ def weighted_squared_loss_given_b_opt_and_b_logreg(B, xs_train, xs_test, ys_trai
 
     return weighted_squared_loss_given_b_opt(B, xs_train, ys_train, ws, b_opt, c_lsqr, add_reg)
 
-    us = np.dot(xs_train, B)
+    us = project(xs_train, B)
     if len(us.shape) == 1:
         us = us.reshape((len(us),1))
     ys_hat = np.dot(us, b_opt)
@@ -363,7 +400,7 @@ def weighted_squared_loss_given_B(B, xs, ys, c, ws=None):
 
 
 def b_opt_to_squared_losses(B, xs, ys, b_opt):
-    us = np.dot(xs, B)
+    us = project(xs, B)
     if len(us.shape) == 1:
         us = us.reshape((len(us),1))
     ys_hat = np.dot(us, b_opt)
@@ -397,8 +434,8 @@ def b_to_logreg_ratios_wrapper(b, xs_train, xs_test, sigma, scale_sigma, B, max_
     if scale_sigma:
         assert len(B.shape) == 1
         sigma = sigma / np.linalg.norm(B)
-    us_train = np.dot(xs_train, B)
-    us_test = np.dot(xs_test, B)
+    us_train = project(xs_train, B)
+    us_test = project(xs_test, B)
     us = np.concatenate((us_train, us_test))
     if len(us.shape) == 1:
         us = us.reshape((len(us),1))
@@ -423,13 +460,18 @@ def b_to_logreg_ratios_wrapper(b, xs_train, xs_test, sigma, scale_sigma, B, max_
 
 
 def lsif_alpha_to_ratios(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio):
-    us_train = np.dot(xs_train, B)
-    us_basis = np.dot(xs_basis, B)
+    us_train = project(xs_train, B)
+    us_basis = project(xs_basis, B)
     train_basis_vals = utils.get_gaussian_K(sigma, us_train, us_basis, nystrom=False)
     ans = np.dot(train_basis_vals, lsif_alpha)
     ans = np.maximum(0.01, ans)
     #ans = np.maximum(0, ans)
     ans = (ans / np.sum(ans)) * len(xs_train)
+    if True: # fix?
+        ans = np.minimum(max_ratio, ans)
+        ans = (ans / np.sum(ans)) * len(xs_train)
+        ans = np.minimum(max_ratio, ans)
+        ans = (ans / np.sum(ans)) * len(xs_train)
 #    print ans[0:10], 'ws'
     if (np.isnan(ans)).any():
         pdb.set_trace()
@@ -454,7 +496,7 @@ def weighted_lsqr_b_opt_given_lsif_alpha(B, xs_train, xs_basis, ys_train, lsif_a
     ws = lsif_alpha_to_ratios(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio)
 #    ws = b_to_logreg_ratios_wrapper(b_logreg, xs_train, xs_test, sigma, scale_sigma, B, max_ratio=5.)
 
-    us = np.dot(xs_train, B)
+    us = project(xs_train, B)
     ys_prime = ys_train * (ws**0.5)
     if len(us.shape) == 1:
         us = us.reshape((len(us),1))
@@ -474,18 +516,55 @@ def weighted_lsqr_b_opt_given_lsif_alpha(B, xs_train, xs_basis, ys_train, lsif_a
     return b_opt_lsqr
 
 
+def squared_losses(xs, ys, b):
+    errors = ys - np.dot(xs, b)
+    return errors * errors
+    print errors.shape, 'gg'
+    return np.dot(errors, errors)
+
+def logistic_regression_losses(xs, ys, b):
+    logits = np.dot(xs, b)
+    try:
+        losses = np.log(1 + np.exp(-ys * logits))
+    except:
+        pdb.set_trace()
+#    print losses.shape, 'gg'
+    return losses
+
+def logistic_regression_loss(B, xs, ys, ws, b, c, add_reg):
+    us = project(xs, B)
+    losses = logistic_regression_losses(us, ys, b)
+#    logits = np.dot(us, b)
+#    losses = np.log(1 + np.exp(-ys * logits))
+#    print c, b, 'hh'
+    return np.mean(ws * losses, axis=0) + (np.dot(b[:-1],b[:-1])*c) # fixed
+
+def logistic_regression_objective_helper(B, xs, ys, ws, c, b):
+    return logistic_regression_loss(B, xs, ys, ws, b, c, True)
+
 def weight_reg_given_lsif_alpha(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio):
     ws = lsif_alpha_to_ratios(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio)
     return np.dot(ws, ws)
 
 
-def expected_conditional_PE_dist(full_ws, ws):
+def expected_conditional_PE_dist(full_ws, ws, pseudocount):
     N = len(full_ws)
     assert len(full_ws) == len(ws)
-    return np.sum(((1./N) * (full_ws**2) / ws), axis=0) - 1.
+#    pseudocount = 1.
+    #ws = ws + pseudocount
+    #ws = ws / N
+#    print full_ws, 'full'
+#    print ws, 'not full'
+#    print zip(full_ws, ws)
+#    print np.sum(((1./N) * (full_ws**2) / ws), axis=0) - 1., 'distance'
+#    pdb.set_trace()
+    ans = np.sum(((1./N) * ((full_ws**2)+pseudocount) / (ws+pseudocount)), axis=0) - 1.
+#    print ans, 'CE'
+#    pdb.set_trace()
+    return ans
 
 def weight_reg(ws):
-    return np.dot(ws, ws)
+    return np.dot(ws, ws) / len(ws)
 
 
 def nystrom_dot(K, b):
@@ -536,6 +615,17 @@ class objective(fxn):
 #        raise NotImplementedError
 
 
+class logistic_regression_objective(objective):
+
+    def _val(self, B, xs_train, ys_train, ws_train, c_pred, b):
+        return logistic_regression_objective_helper(B, xs_train, ys_train, ws_train, c_pred, b)
+
+    def _grad(self, *args, **kwargs):
+        return fxn._grad(self, *args, **kwargs)
+    
+    def arg_shape(self, B, xs_train, ys_train, ws_train, c_pred):
+        return (B.shape[1],)
+
 class logreg_ratio_objective(objective):
 
     def __init__(self, *args, **kwargs):
@@ -559,8 +649,8 @@ class logreg_ratio_objective(objective):
             assert len(B.shape) == 1
             sigma = sigma / np.linalg.norm(B)
 #        pdb.set_trace()
-        us_train = np.dot(xs_train, B)
-        us_test = np.dot(xs_test, B)
+        us_train = project(xs_train, B)
+        us_test = project(xs_test, B)
         us = np.concatenate((us_train, us_test))
         if len(us.shape) == 1:
             us = us.reshape((len(us),1))
@@ -611,8 +701,8 @@ class quad_objective(fxn):
 class new_kmm_objective(quad_objective):
     
     def _Pq(self, xs_train, xs_test, sigma, B, w_max, eps, nystrom):
-        us_train = np.dot(xs_train, B)
-        us_test = np.dot(xs_test, B)
+        us_train = project(xs_train, B)
+        us_test = project(xs_test, B)
         if len(us_train.shape) == 1:
             us_train = us_train.reshape((len(us_train),1))
         if len(us_test.shape) == 1:
@@ -636,7 +726,65 @@ class nystrom_kmm_objective(new_kmm_objective):
         # calls nystrom getter, multiplies
         (C,W_inv,C_T), kappa = self._Pq(xs_train, xs_test, sigma, B, w_max, eps, nystrom=True)
         return np.dot(np.dot(C,W_inv), C_T), kappa
+
+def SIR_directions(xs, ys, method='sir'):
+    from rpy2.robjects.packages import importr
+    import rpy2.robjects as ro, string
+    r = ro.r
+    r('library(dr)')
+    # create df
+    N,K = xs.shape
+    #pdb.set_trace()
+    df_cmd = 'df=data.frame(matrix(c(%s),nrow=%d,ncol=%d))' % (string.join(map(str,xs.reshape(N*K)),sep=','),N,K)
+    #print df_cmd
+    import rpy2.robjects.numpy2ri as rpyn
+    r(df_cmd)
+    r('df$Y=c(%s)' % string.join(map(str,ys),sep=','))
+    #print r('dim(df)')
+    # call SIR
+    rel = 'Y~%s' % string.join(map(lambda i: 'X%d'%i, range(1,K+1)), sep='+')
+    #print rel
+    bases = r('dr(%s, data=df, method=\"%s\")$evectors' % (rel,method))
+    return rpyn.ri2py(bases)
+
     
+def KDE(xs, B, sigma, xs_eval):
+    # estimates are off by a multiplicative constant
+    num_basis = 100
+    us = np.dot(xs, B)
+    us_basis = us[0:num_basis,:]
+    us_eval = np.dot(xs_eval, B)
+    return np.sum(utils.get_gaussian_K_helper(sigma, us_eval, us_basis), axis=1)
+
+def KDE_ws(xs_train, xs_test, sigma, B, c_lsif, max_ratio, switch=False):
+    if not switch:
+        N_train = len(xs_train)
+        train_densities = KDE(xs_train, B, sigma, xs_train)
+        test_densities = KDE(xs_test, B, sigma, xs_train)
+        train_densities = train_densities + c_lsif # view c_lsif as pseudocount here
+        test_densities = test_densities + c_lsif
+        ratios = test_densities / train_densities
+        ratios = N_train * ratios / np.sum(ratios)
+        if True: # fix?
+            ratios = np.minimum(max_ratio, ratios)
+            ratios = N_train * ratios / np.sum(ratios)
+            
+        return ratios
+    else:
+        N_test = len(xs_test)
+        train_densities = KDE(xs_train, B, sigma, xs_test)
+        test_densities = KDE(xs_test, B, sigma, xs_test)
+        train_densities = train_densities + c_lsif # view c_lsif as pseudocount here
+        test_densities = test_densities + c_lsif
+        ratios = test_densities / train_densities
+        ratios = N_test * ratios / np.sum(ratios)
+        if True: # fix?
+            ratios = np.minimum(max_ratio, ratios)
+            ratios = N_test * ratios / np.sum(ratios)
+        return ratios
+
+#def KLIEP_objective_given_ws(ws_train, ws_test):
+#    return np.log(ws_test) / len(ws_test)
 
 def LSIF_H_h(xs_train, xs_test, xs_basis, sigma):
 #    sigma = utils.median_distance(np.concatenate((xs_train, xs_test), axis=0), np.concatenate((xs_train, xs_test), axis=0))
@@ -649,10 +797,10 @@ def LSIF_H_h(xs_train, xs_test, xs_basis, sigma):
 
 
 def least_squares_lsif_alpha_given_B(xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg):
-#    print c_lsif, sigma
-    us_train = np.dot(xs_train, B)
-    us_test = np.dot(xs_test, B)
-    us_basis = np.dot(xs_basis, B)
+    #    print c_lsif, sigma
+    us_train = project(xs_train, B)
+    us_test = project(xs_test, B)
+    us_basis = project(xs_basis, B)
     H, h = LSIF_H_h(us_train, us_test, us_basis, sigma)
     if add_reg:
         H_hat = (H / len(us_train)) + (np.eye(len(H)) * c_lsif)
@@ -671,12 +819,50 @@ def least_squares_lsif_alpha_given_B(xs_train, xs_test, sigma, B, c_lsif, xs_bas
 #    print lsif_alpha_to_ratios(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio)[0:10]
     return lsif_alpha
 
+def kliep_objective(xs_train, xs_test, alpha):
+    N_train, N_test = len(xs_train), len(xs_test)
+    return (- ( np.sum(np.dot(xs_test, alpha) / N_test) - (np.log(1./N_train) + logsumexp(np.dot(xs_train, alpha))) ))
+
+def loglinear_alpha_given_x(xs_train, xs_test, c):
+
+    N_train, N_test = len(xs_train), len(xs_test)
+    D = xs_train.shape[1]
+    assert xs_train.shape[1] == xs_test.shape[1]
+    
+    #print c
+    
+    def objective(alpha):
+#        print alpha
+#        print project(xs_test, alpha) / N_test
+#        print np.log(1./N_train)
+#        print project(xs_train, alpha)
+#        pdb.set_trace()
+#        print logsumexp(project(xs_train, alpha))
+#        print - ( (project(xs_test, alpha) / N_test) - (np.log(1./N_train) + logsumexp(project(xs_train, alpha))) ), 'all'
+#        pdb.set_trace()
+        return kliep_objective(xs_train, xs_test, alpha) + (c * np.dot(alpha,alpha))
+#        return (- ( np.sum(project(xs_test, alpha) / N_test) - (np.log(1./N_train) + logsumexp(project(xs_train, alpha))) )) + (c * np.dot(alpha,alpha))
+
+    dobjective_dalpha = autograd.jacobian(objective)
+    #import scipy
+    alpha_fit = scipy.optimize.minimize(fun=objective, x0=np.zeros(D), jac=dobjective_dalpha)['x']
+    return alpha_fit
+
+def loglinear_ratios_given_x(xs_train, xs_test, c):
+    N_train, N_test = len(xs_train), len(xs_test)
+    alpha_fit = loglinear_alpha_given_x(xs_train, xs_test, c)
+    unnormalized_ws_train = np.exp(np.dot(xs_train, alpha_fit))
+    ws_train = N_train * unnormalized_ws_train / np.sum(unnormalized_ws_train)
+
+    return ws_train
+
+
 class LSIF_objective(quad_objective):
 
     def Pq(self, xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg):
-        us_train = np.dot(xs_train, B)
-        us_test = np.dot(xs_test, B)
-        us_basis = np.dot(xs_basis, B)
+        us_train = project(xs_train, B)
+        us_test = project(xs_test, B)
+        us_basis = project(xs_basis, B)
         H, h = LSIF_H_h(us_train, us_test, us_basis, sigma)
         #print H
 #        print c_lsif, 'c_lsif'
@@ -703,8 +889,8 @@ class single_arg_LSIF_objective(quad_objective):
 class kmm_objective(quad_objective):
     
     def Pq(self, xs_train, xs_test, sigma, B):
-        us_train = np.dot(xs_train, B)
-        us_test = np.dot(xs_test, B)
+        us_train = project(xs_train, B)
+        us_test = project(xs_test, B)
         if len(us_train.shape) == 1:
             us_train = us_train.reshape((len(us_train),1))
         if len(us_test.shape) == 1:
@@ -830,11 +1016,19 @@ class constant_Gh_ineq_constraints(Gh_ineq_constraints):
 
 class unconstrained_ineq_constraints(constant_Gh_ineq_constraints):
 
-    def __init__(self, num_vars):
-        self.num_vars = num_vars
+    def __init__(self, *args, **kwargs):
+        fxn.__init__(self, *args, **kwargs)
+#        self.num_vars = num_vars
 
     def _val(self, *args):
-        return np.zeros((len(args[-1]),0))
+        return np.zeros((0,))
+#        ans = np.zeros((len(args[-1]),0))
+#        pdb.set_trace()
+#        return ans
+
+    def _grad(self, *args, **kwargs):
+        care_argnums = kwargs.get('care_argnums')
+        return np.zeros((0,)+args[care_argnums[0]].shape)
         
 #    def _get_Gh(self, *args):
 #        x_len = args
@@ -897,12 +1091,14 @@ class cvx_opt(opt):
 
     @property
     def ineq_constraints(self):
-        return unconstrained_ineq_constraints(self.objective.arg_shape(*args)[0])
+#        pdb.set_trace()
+        return unconstrained_ineq_constraints()#.autograd_fxn()
+#        return unconstrained_ineq_constraints(self.objective.arg_shape(*args)[0])
 #        return np.zeros(shape=(0,self.objective.arg_shape(*args)[0])), np.zeros(shape=(0,))
     
     def forward_prop(self, *args):
-        f = lambda x: self.objective.val(*(args + (x,)))
-        df_dx = lambda x: self.dobjective_dx.val(*(args + (x,)))
+        f = lambda x: self.objective(*(args + (x,)))
+        df_dx = lambda x: self.dobjective_dx(*(args + (x,)))
         if not self.warm_start:
             x0=np.random.normal(size=self.objective.arg_shape(*args))
         else:
@@ -911,6 +1107,7 @@ class cvx_opt(opt):
             except AttributeError:
                 x0 = np.random.normal(size=self.objective.arg_shape(*args))
         logger = utils.optimizer_logger(f, df_dx)
+#        pdb.set_trace()
         val = self.optimizer.optimize(f, df_dx, x0)
         if self.warm_start:
             self.old_x_opt = val
@@ -967,8 +1164,8 @@ def LSIF_get_Gh(xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio):
     num_bases = len(xs_basis)
     G_pre, h_pre = -1. * np.eye(num_bases), np.zeros(num_bases)
 #    return G_pre, h_pre
-    us_train = np.dot(xs_train, B)
-    us_basis = np.dot(xs_basis, B)
+    us_train = project(xs_train, B)
+    us_basis = project(xs_basis, B)
     train_basis_vals = utils.get_gaussian_K(sigma, us_train, us_basis, nystrom=False)
 #    print train_basis_vals[0:5,0:20]
 #    pdb.set_trace()
@@ -1067,13 +1264,16 @@ def get_dg_dp_thru_x_opt_new(lin_solver, objective_hessian_vector_product, dg_dx
         Cu_pre = objective_hessian_vector_product(u_pre, x_argnum_in_f_args, x_argnum_in_f_args, *(f_args+(f_val,)))
 #        Cu_pre += np.dot(G_tight.T, u_post)
         #Cu_pre += np.dot(G.T, u_post)
-        Cu_pre += np.dot((f_dual_val[:,np.newaxis] * dineq_dx_opt_val).T, u_post)
+        if len(u_post) > 0:
+            Cu_pre += np.dot((f_dual_val[:,np.newaxis] * dineq_dx_opt_val).T, u_post)
         #Cu_post = np.dot(G_tight, u_pre)
 #        Cu_post = np.dot(f_dual_val[:,np.newaxis] * dineq_dx_opt_val, u_pre) # new
-        Cu_post = np.dot(dineq_dx_opt_val, u_pre) # new
+            Cu_post = np.dot(dineq_dx_opt_val, u_pre) # new
         #Cu_post += (np.dot(G,f_val) - h) * u_post # new
-        Cu_post += ineq_val * u_post # new
-        Cu = np.concatenate((Cu_pre, Cu_post), axis=0)
+            Cu_post += ineq_val * u_post # new
+            Cu = np.concatenate((Cu_pre, Cu_post), axis=0)
+        else:
+            Cu = Cu_pre
 #        print Cu
 #        pdb.set_trace()
         return Cu
@@ -1129,10 +1329,15 @@ class sum(fxn):
         ans = 0.
         f_vals = []
         for (f,f_argnums,w) in itertools.izip(self.fs, self.fs_argnums, self.weights):
-            f_args = [args[i] for i in f_argnums]
-            f_val = f.val(*f_args)
+            try:
+                f_args = [args[i] for i in f_argnums]
+            except:
+                pdb.set_trace()
+            #f_val = f.val(*f_args)
+            f_val = f(*f_args)
             f_vals.append(f_val)
             ans += w * f_val
+        #print f_vals, 'sum', self.fs
         return f_vals, ans
 
     def backward_prop(self, args, f_vals, val, care_argnums):
@@ -1209,7 +1414,7 @@ class two_step(fxn):
             else:
                 return args[key]
 
-        return map(get, self.g_argnums)
+        return tuple(map(get, self.g_argnums))
         
 #        try:
 #            return tuple([args[i] for i in self.g_argnums])
@@ -1419,7 +1624,6 @@ class g_thru_f_opt_new(two_step):
             
             #P, q = self.full_quad_opt.objective.Pq(*quad_args)
             #G, h = self.g.get_Gh(*g_args)
-#            pdb.set_trace()
             ineq_val = self.g.ineq_constraints(*(g_args+(g_val,)))
             dineq_dx_opt_val = self.g.ineq_constraints.grad(*(g_args+(g_val,)), care_argnums=(len(g_args),))
             dh_dg_dg_dp_val = basic.timeit('get_dg_dp_thru_x_opt_new')(get_dg_dp_thru_x_opt_new)(self.g.lin_solver, self.g.objective.hessian_vector_product, dh_dxopt_val, ineq_val, dineq_dx_opt_val, g_args, g_val, g_ineq_dual_val, care_argnum_in_g_args, h_args, self.g.ineq_constraints.vector_jacobian_product)
