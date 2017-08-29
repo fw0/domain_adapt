@@ -24,7 +24,7 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg, B_init_f_gette
 
     if c_lsif_sigma_grid_search_sigma_percentiles is None:
         #c_lsif_sigma_grid_search_sigma_percentiles = np.array([20.,35.,50.,65.,80.])
-        c_lsif_sigma_grid_search_sigma_percentiles = np.array([0.25,0.5,0.75])
+        c_lsif_sigma_grid_search_sigma_percentiles = np.array([25.,50.,75.])
 
     
 #    @basic.do_cprofile('cumtime')
@@ -400,6 +400,9 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg, B_init_f_gette
             )
 
         ws_train = ws_given_B(xs_train, xs_test, sigma_fit, B_fit, c_lsif_fit, xs_basis, max_ratio, add_reg_lsif)
+
+        print 'N_eff:', ws_train.sum()**2 / np.dot(ws_train, ws_train)
+
         b_opt_fit = b_opt_given_ws(B_fit, xs_train, ys_train, ws_train, c_pred_fit)
 
         if unconstrained:

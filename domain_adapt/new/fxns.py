@@ -1453,3 +1453,33 @@ class upper_bound(product):
 
     def check_care_argnums(self, (B, xs, ys, ws, b_opt, ws_full), care_argnums):
         pass
+
+
+class sklearn_linear_regression(object):
+
+    def __init__(self, cs):
+        self.cs = cs
+
+    def __call__(self, xs_train, xs_test, ys_train, ys_test=None):
+        from sklearn import linear_model
+        reg = linear_model.RidgeCV(alphas=1./self.cs)
+        reg.fit(xs_train, ys_train)
+
+        predictor = lambda x: reg.predict([x])[0]
+
+        return predictor
+
+
+class sklearn_kernel_regression(object):
+
+    def __init__(self, c):
+        self.c = c
+
+    def __call__(self, xs_train, xs_test, ys_train, ys_test=None):
+        from sklearn.kernel_ridge import KernelRidge
+        reg = KernelRidge(kernel='rbf',gamma=1./self.c)
+        reg.fit(xs_train, ys_train)
+
+        predictor = lambda x: reg.predict([x])[0]
+
+        return predictor
