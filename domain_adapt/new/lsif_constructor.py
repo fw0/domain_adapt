@@ -10,7 +10,7 @@ import itertools
 def project(xs, B):
     return np.concatenate((np.dot(xs,B), np.ones((len(xs),1))), axis=1)
 
-def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None, pseudo=1., which_B_init='random_projection', B_init_f_getter=None, learn_weights=True, learn_projection=True, no_projection=False, max_ratio=5, unconstrained=False, lsif_least_squares=True, KDE_ratio=False, c_pred_use_test=False, num_folds_c_pred=3, plot_b_info=None, num_tries=1, unconstrained_scipy_minimize_method=None, unconstrained_scipy_minimize_options={}, unconstrained_scipy_minimize_info_f=lambda x: None, unconstrained_scipy_minimize_verbose=1, quad_opt_warm_start=True, pymanopt_options={'logverbosity':2, 'maxiter':100}, linesearch_method='brent', linesearch_options={}, linesearch_init_window_width=100, c_lsif_sigma_grad_warm_start=False, c_lsif_sigma_grad_scipy_minimize_method=None, c_lsif_sigma_grad_scipy_minimize_options={'maxiter':1}, c_lsif_sigma_grad_scipy_minimize_info_f=lambda x: None, c_lsif_sigma_grad_scipy_minimize_verbose=1, c_pred_line_search=False, c_pred_grid_search=True, c_pred_grad_warm_start=False, c_pred_grad_scipy_minimize_method=None, c_pred_grad_scipy_minimize_options={}, c_pred_grid_search_c_pred_range=None, c_pred_grad_scipy_minimize_info_f=lambda x: None, c_pred_grad_scipy_minimize_verbose=1, c_lsif_sigma_grid_search=True, num_folds_lsif=3, c_lsif_sigma_grid_search_c_lsif_range=None, c_lsif_sigma_grid_search_sigma_range=None, c_lsif_sigma_grid_search_sigma_percentiles=None, many_optimizer_num_cycles=1, b_pred_warm_start=True, b_pred_scipy_minimize_method=None, b_pred_scipy_minimize_options={'maxiter':100}, b_pred_scipy_minimize_info_f=lambda x: None, b_pred_scipy_minimize_verbose=0, c_ll_grid_search_c_ll_range=None, num_folds_c_ll=3, tradeoff_UB=0., _c_ll=0., _c_full=None, num_folds_c_full=3, c_full_grid_search_c_full_range=None):
+def lsif_ratio_fitter(which_loss, num_basis=100, tradeoff_weight_reg=0., u_dim=None, pseudo=1., which_B_init='random_projection', use_initial_sigma_range=False, uniform_full_weights=False, weighted_cheating_init=False, hardcoded_B_getter=None, learn_weights=True, learn_projection=False, no_projection=False, max_ratio=5, unconstrained=False, lsif_least_squares=True, KDE_ratio=False, c_pred_use_test=False, num_folds_c_pred=3, plot_b_info=None, num_tries=1, unconstrained_scipy_minimize_method=None, unconstrained_scipy_minimize_options={}, unconstrained_scipy_minimize_info_f=lambda x: None, unconstrained_scipy_minimize_verbose=1, quad_opt_warm_start=True, pymanopt_options={'logverbosity':2, 'maxiter':100}, linesearch_method='brent', linesearch_options={}, linesearch_init_window_width=100, c_lsif_sigma_grad_warm_start=False, c_lsif_sigma_grad_scipy_minimize_method=None, c_lsif_sigma_grad_scipy_minimize_options={'maxiter':1}, c_lsif_sigma_grad_scipy_minimize_info_f=lambda x: None, c_lsif_sigma_grad_scipy_minimize_verbose=1, c_pred_line_search=False, c_pred_grid_search=True, c_pred_grad_warm_start=False, c_pred_grad_scipy_minimize_method=None, c_pred_grad_scipy_minimize_options={}, c_pred_grid_search_c_pred_range=None, c_pred_grad_scipy_minimize_info_f=lambda x: None, c_pred_grad_scipy_minimize_verbose=1, c_lsif_sigma_grid_search=True, num_folds_lsif=3, c_lsif_sigma_grid_search_c_lsif_range=None, c_lsif_sigma_grid_search_sigma_range=None, c_lsif_sigma_grid_search_sigma_percentiles=None, many_optimizer_num_cycles=1, b_pred_warm_start=True, b_pred_scipy_minimize_method=None, b_pred_scipy_minimize_options={'maxiter':100}, b_pred_scipy_minimize_info_f=lambda x: None, b_pred_scipy_minimize_verbose=0, c_ll_grid_search_c_ll_range=None, num_folds_c_ll=3, tradeoff_UB=0., _c_ll=100., _c_full=None, num_folds_c_full=3, c_full_grid_search_c_full_range=None, last_pass=False, use_train_oos=False, add_reg_pred=False, weight_loss=False):
     """
     unconstrained options are for 1d unconstrained projections
     pymanopt options is for manifold optimization
@@ -19,9 +19,13 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None,
     c_pred_grad options is for gradient descent optimization of c_pred
     random_projection is the dim of u, if used
     """
+
+    if not weight_loss:
+        assert uniform_full_weights
     
     if c_lsif_sigma_grid_search_c_lsif_range is None:
-        c_lsif_sigma_grid_search_c_lsif_range = 10**(np.arange(-3,2).astype(float))
+        c_lsif_sigma_grid_search_c_lsif_range = 10**(np.arange(-4,4).astype(float))
+#        c_lsif_sigma_grid_search_c_lsif_range = 10**(np.arange(-3,2).astype(float))
 
     if c_lsif_sigma_grid_search_sigma_range is None:
         c_lsif_sigma_grid_search_sigma_range = np.linspace(0.1,10,4)
@@ -30,35 +34,41 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None,
         #c_lsif_sigma_grid_search_sigma_percentiles = np.array([20.,35.,50.,65.,80.])
 #        c_lsif_sigma_grid_search_sigma_percentiles = np.array([10.,25.])#,50.])#,75.])
 #        c_lsif_sigma_grid_search_sigma_percentiles = np.array([25.,50.,75.])
-        c_lsif_sigma_grid_search_sigma_percentiles = np.linspace(10.,90.,9)
+#        c_lsif_sigma_grid_search_sigma_percentiles = np.linspace(10.,90.,9)
+        c_lsif_sigma_grid_search_sigma_percentiles = np.linspace(.1,99.9,9)
 
     if c_pred_grid_search_c_pred_range is None:
-        c_pred_grid_search_c_pred_range = 10**(np.arange(-2,2).astype(float))
+        c_pred_grid_search_c_pred_range = 10**(np.arange(-4,2).astype(float))
 
     if c_ll_grid_search_c_ll_range is None:
-        c_ll_grid_search_c_ll_range = 10**(np.arange(-2,2).astype(float))
+        c_ll_grid_search_c_ll_range = 10**(np.arange(-3,2).astype(float))
 
     if c_full_grid_search_c_full_range is None:
         c_full_grid_search_c_full_range = 10**(np.arange(-2,3).astype(float))
+        c_full_grid_search_c_full_range = 10**(np.arange(-4,4).astype(float))
 
     #lsif_ratio_fitter.c_ll = c_ll
     #lsif_ratio_fitter.c_full = c_full
     
 #    @basic.do_cprofile('cumtime')
-    def fitter(xs_train, xs_test, ys_train, ys_test=None):
+    def fitter(xs_train, xs_test, ys_train, ys_test=None, xs_train_oos=None, xs_test_oos=None, ys_train_oos=None, ys_test_oos=None):
 
-        true_B = np.zeros((xs_train.shape[1],2))
-        true_B[0,0] = 1.
-        true_B[1,1] = 1.
-
+#        true_B = np.zeros((xs_train.shape[1],2))
+#        true_B[0,0] = 1.
+#        true_B[1,1] = 1.
         print 'fitting:', fitter.__dict__
+
+        if use_train_oos:
+            xs_train = np.concatenate((xs_train, xs_train_oos), axis=0)
+            ys_train = np.concatenate((ys_train, ys_train_oos))
+
 #        print 'tradeoff_weight_reg: %.5f' % tradeoff_weight_reg
 #        print 'tradeoff_UB: %.5f' % tradeoff_UB
 
         # define constants
 
         xs_basis = xs_test[0:num_basis]
-        add_reg_pred = False # for evaluating loss during training
+#        add_reg_pred = False # for evaluating loss during training
         add_reg_pred_oos = False
         add_reg_lsif = True # for training
         add_reg_lsif_oos = False
@@ -71,7 +81,9 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None,
 
 #        print lsif_ratio_fitter.c_full
             
-        if _c_full is None:
+        if uniform_full_weights:
+            ws_full_train = np.ones(len(xs_train), dtype=float)
+        elif _c_full is None:
             
             def kliep_objective_oos(_c_full):
                 from sklearn.model_selection import KFold
@@ -87,15 +99,25 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None,
                     losses += fold_test_loss
                 return losses
 
-            c_full_optimizer = optimizers.grid_search_optimizer()
-            c_full, = c_full_optimizer.optimize(kliep_objective_oos, (c_full_grid_search_c_full_range,))
-#            pdb.set_trace()
+            full_N_effs = np.array([fxns.N_eff(fxns.loglinear_ratios_given_x(xs_train, xs_test, __c_full)) for __c_full in c_full_grid_search_c_full_range])
+#            N_eff_threshold = 0.1 * len(xs_train)
+            N_eff_threshold = 0.02 * len(xs_train)
+            above_threshold = full_N_effs > N_eff_threshold
+            print full_N_effs, 'N_effs'
+            above_threshold_c_full_range = c_full_grid_search_c_full_range[above_threshold]
+
+            if len(above_threshold_c_full_range) == 0:
+                ws_full_train = np.ones(len(xs_train), dtype=float)
+            else:
+                c_full_optimizer = optimizers.grid_search_optimizer()
+                c_full, = c_full_optimizer.optimize(kliep_objective_oos, (above_threshold_c_full_range,))
+                ws_full_train = fxns.loglinear_ratios_given_x(xs_train, xs_test, c_full)
+#                pdb.set_trace()
 
         else:
 
             c_full = _c_full
-            
-        ws_full_train = fxns.loglinear_ratios_given_x(xs_train, xs_test, c_full)
+            ws_full_train = fxns.loglinear_ratios_given_x(xs_train, xs_test, c_full)
 #        print ws_full_train
 
         # define objective fxn
@@ -177,14 +199,19 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None,
             h_argnums=(0,1,2,3,4,5,6,7,8),
             g_val_h_argnum=4
             )
-            
+        
+        if weight_loss:
+            loss_argnums = (0,1,2,3,4,5,6,7,8)
+        else:
+            loss_argnums = (0,1,2,7,4,5,6,7,8)
         objective_given_ws = fxns.sum(# B, xs_train, ys_train, ws_train, c_pred, add_reg_pred, c_ll, ws_full_train, pseudo
             fs=[
                 weighted_loss_and_ll_given_ws, # B, xs_train, ys_train, ws_train, c_pred, add_reg_pred, c_ll, ws_full_train, pseudo
                 fxns.fxn.autograd_fxn(_val=fxns.weight_reg), # ws_train
                 ],
             fs_argnums=[
-                (0,1,2,3,4,5,6,7,8),
+#                (0,1,2,3,4,5,6,7,8),
+                loss_argnums,
                 (3,),
                 ],
             weights=[
@@ -419,12 +446,16 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None,
                     xs_train_oos = xs_train[train_oos_idx]
                     xs_test_is = xs_test[test_is_idx]
                     xs_test_oos = xs_test[test_oos_idx]
-                    alpha = alpha_given_B(xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg_lsif)
+                    this_xs_basis = xs_test_is[0:100]
+#                    pdb.set_trace()
+#                    alpha = alpha_given_B(xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg_lsif)
+                    alpha = alpha_given_B(xs_train, xs_test, sigma, B, c_lsif, this_xs_basis, max_ratio, add_reg_lsif)
                     #grad = alpha_given_B.grad(xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg_lsif, care_argnums=(3,))
-                    ws_train = fxns.lsif_alpha_to_ratios(alpha, xs_train, xs_basis, sigma, B, max_ratio)
+                    #ws_train = fxns.lsif_alpha_to_ratios(alpha, xs_train, xs_basis, sigma, B, max_ratio)
     #                print ws_train, 'ws_train'
     #                fold_objective = lsif_objective_oos(xs_train_is, xs_test_is, sigma, B, c_lsif, xs_test_is[0:num_basis], max_ratio, add_reg_lsif, xs_train_oos, xs_test_oos, add_reg_lsif_oos)
-                    fold_objective = lsif_objective_oos(xs_train_is, xs_test_is, sigma, B, c_lsif, xs_basis, max_ratio, add_reg_lsif, xs_train_oos, xs_test_oos, add_reg_lsif_oos)
+#                    fold_objective = lsif_objective_oos(xs_train_is, xs_test_is, sigma, B, c_lsif, xs_basis, max_ratio, add_reg_lsif, xs_train_oos, xs_test_oos, add_reg_lsif_oos)
+                    fold_objective = lsif_objective_oos(xs_train_is, xs_test_is, sigma, B, c_lsif, this_xs_basis, max_ratio, add_reg_lsif, xs_train_oos, xs_test_oos, add_reg_lsif_oos)
                     objectives += fold_objective * len(train_oos_idx)
                 return objectives / len(xs_train)
 
@@ -482,18 +513,28 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None,
 
         else:
 
+            initial_sigma_range = []
+
             def c_lsif_sigma_optimizer_get_c_lsif_sigma_ranges(c_lsif, sigma, c_pred, c_ll, B):
 #                print 'c_lsif, sigma'
-                us_test = np.dot(xs_test, B)
-                center = np.mean(us_test, axis=0)
-                diff = us_test - center
-                dists = np.sum(diff * diff, axis=1) ** 0.5
+                if use_initial_sigma_range and (not (initial_sigma_range == [])):
+                    return (c_lsif_sigma_grid_search_c_lsif_range, initial_sigma_range)
+                else:
+                    us_test = np.dot(xs_test, B)
+                    us_train = np.dot(xs_train, B)
+                    all_us = np.concatenate((us_test,us_train), axis=0)
+                    center = np.mean(all_us, axis=0)
+                    diff = all_us - center
+                    dists = np.sum(diff * diff, axis=1) ** 0.5
 #                print np.mean(dists), 'mean dist'
-                sigma_range = np.percentile(dists, c_lsif_sigma_grid_search_sigma_percentiles)
+                    sigma_range = np.percentile(dists, c_lsif_sigma_grid_search_sigma_percentiles)
+                    for sigma in sigma_range:
+                        initial_sigma_range.append(sigma)
+#                sigma_range = np.linspace(3,20,20)
 #                print sigma_range, 'sigma_range'
 #                print center, 'center'
 #                pdb.set_trace()
-                return (c_lsif_sigma_grid_search_c_lsif_range, sigma_range)
+                    return (c_lsif_sigma_grid_search_c_lsif_range, initial_sigma_range)
 #                return (c_lsif_sigma_grid_search_c_lsif_range, c_lsif_sigma_grid_search_sigma_range)
 
             def c_lsif_sigma_optimizer_get_objective(c_lsif, sigma, c_pred, c_ll, B):
@@ -505,6 +546,7 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None,
                     return lambda _c_lsif, _sigma: weighted_lsif_objective_cv_given_B(xs_train, xs_test, _c_lsif, B, _sigma, max_ratio)
 
             def c_lsif_sigma_optimizer_out_f((c_lsif, sigma, c_pred, c_ll, B), (objective, ranges), (new_c_lsif, new_sigma)):
+#                return (0.001, 1.1, c_pred, c_ll, B)
                 return (new_c_lsif, new_sigma, c_pred, c_ll, B)
 
             c_lsif_sigma_horse_optimizer = optimizers.grid_search_optimizer()
@@ -654,12 +696,27 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None,
 #        else:
 #            assert False
 
-        horse_optimizer = optimizers.many_optimizer(coord_optimizers, num_cycles=many_optimizer_num_cycles)
+        if last_pass:
+            horse_optimizer = optimizers.many_optimizer(coord_optimizers, num_cycles=many_optimizer_num_cycles, last_round_start=0, last_round_end=-1)
+        else:
+            horse_optimizer = optimizers.many_optimizer(coord_optimizers, num_cycles=many_optimizer_num_cycles)
         optimizer = optimizers.multiple_optimizer(horse_optimizer, num_tries=num_tries, num_args=5)
 
 
         # do the optimizing
         partialled_objective_given_B = lambda c_lsif, sigma, c_pred, c_ll, B: objective_given_B(xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg_lsif, ys_train, c_pred, add_reg_pred, c_ll, ws_full_train, pseudo)
+
+        # make sure ws_given_B is defined for the sake of smart initializing
+        if not KDE_ratio:
+        
+            ws_given_B = fxns.two_step( # xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg_lsif
+                g=alpha_given_B, # xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg_lsif
+                h=fxns.fxn.autograd_fxn(_val=fxns.lsif_alpha_to_ratios), # lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio
+                g_argnums=(0,1,2,3,4,5,6,7),
+                h_argnums=(0,5,2,3,6),
+                g_val_h_argnum=0
+                )
+
 
         if not learn_weights:
             c_lsif_init_f = lambda: 100000
@@ -675,19 +732,76 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None,
             #B_init_f = B_init_f_getter(xs_train, ys_train, xs_test)
             if which_B_init == 'random_projection':
                 #assert B_init_f_getter is None
-                try:
-#                    pdb.set_trace()
-                    B_init_f = lambda: utils.ortho(np.random.normal(size=(xs_train.shape[1], u_dim)))
-                except:
-                    pdb.set_trace()
+                B_init_f = lambda: utils.ortho(np.random.normal(size=(xs_train.shape[1], u_dim)))
+                
+            elif which_B_init in ['smart', 'unweighted', 'weighted']:
+
+                class supervised_initializer(object):
+                        
+                    def __init__(self, unweighted_first=True, weighted_cheating=False):
+
+                        self.unweighted_first, self.weighted_cheating = unweighted_first, weighted_cheating
+                        
+                        if not weighted_cheating_init:
+                            c_lsif, sigma, c_pred, c_ll, B = None, None, None, None, np.eye(xs_train.shape[1])
+                            c_lsif, sigma, c_pred, c_ll, B = c_lsif_sigma_optimizer(c_lsif, sigma, c_pred, c_ll, B)
+                            c_lsif, sigma, c_pred, c_ll, B = c_pred_optimizer(c_lsif, sigma, c_pred, c_ll, B)
+                            if not KDE_ratio:
+                                ws_train = ws_given_B(xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg_lsif)
+                            else:
+                                ws_train = ws_given_B(xs_train, xs_test, sigma, B, c_lsif, max_ratio)
+                            weighted_b_opt = b_opt_given_ws(B, xs_train, ys_train, ws_train, c_pred)
+                            self.weighted_b_opt = weighted_b_opt[:-1]
+                        else:
+                            if which_loss == 'square':
+                                cheating_fitter = fxns.sklearn_ridge_fitter(alphas=10**np.linspace(-3,3,7), cheat=True)
+                                self.weighted_b_opt = cheating_fitter(xs_train, xs_test, ys_train, ys_test).coef_
+                            elif which_loss == 'logistic':
+                                cheating_fitter = fxns.sklearn_ridge_logreg_fitter(alphas=10**np.linspace(-3,3,7), cheat=True)
+                                self.weighted_b_opt = cheating_fitter(xs_train, xs_test, ys_train, ys_test).coef_
+
+                        c_lsif, sigma, c_pred, c_ll, B = 100000, 100000, None, None, np.eye(xs_train.shape[1])
+                        c_lsif, sigma, c_pred, c_ll, B = c_pred_optimizer(c_lsif, sigma, c_pred, c_ll, B)
+                        ws_train = np.ones(len(xs_train), dtype=float)
+                        unweighted_b_opt = b_opt_given_ws(B, xs_train, ys_train, ws_train, c_pred)
+                        self.unweighted_b_opt = unweighted_b_opt[:-1]
+
+                        self.counter = 0
+
+                    def __call__(self):
+                        B = np.random.normal(size=(xs_train.shape[1], u_dim))
+                        if not (u_dim == 1 and self.counter >= 2):
+                            if self.counter % 3 == 0:
+                                if self.unweighted_first:
+                                    B[:,0] = self.unweighted_b_opt
+                                else:
+                                    B[:,0] = self.weighted_b_opt
+                            elif self.counter % 3 == 1:
+                                if self.unweighted_first:
+                                    B[:,0] = self.weighted_b_opt
+                                else:
+                                    B[:,0] = self.unweighted_b_opt
+                            elif self.counter % 3 == 2:
+                                B[:,0] = self.unweighted_b_opt
+                        self.counter += 1
+                        return utils.ortho(B)
+
+                if which_B_init in ['smart', 'unweighted']:
+                    B_init_f = supervised_initializer(unweighted_first=True)
+                elif which_B_init == 'weighted':
+                    B_init_f = supervised_initializer(unweighted_first=False)
+                else:
+                    assert False
+
                 #B_init_f = lambda: true_B
             elif which_B_init in ['sir','save','phdres']:
                 SIR_B = fxns.SIR_directions(xs_train, ys_train, method=which_B_init)
 #                print SIR_B[:,0]
 #                pdb.set_trace()
                 B_init_f = lambda: SIR_B[:,0:u_dim]
+#                pdb.set_trace()
             elif which_B_init == 'hardcoded':
-                B_init_f = B_init_f_getter(xs_train, ys_train, xs_test)
+                B_init_f = lambda: hardcoded_B_getter(xs_train, ys_train, xs_test)
             else:
                 assert False
         elif no_projection:
@@ -715,21 +829,11 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None,
 
         if not KDE_ratio:
         
-            ws_given_B = fxns.two_step( # xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg_lsif
-                g=alpha_given_B, # xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg_lsif
-                h=fxns.fxn.autograd_fxn(_val=fxns.lsif_alpha_to_ratios), # lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio
-                g_argnums=(0,1,2,3,4,5,6,7),
-                h_argnums=(0,5,2,3,6),
-                g_val_h_argnum=0
-                )
-
-
             ws_train = ws_given_B(xs_train, xs_test, sigma_fit, B_fit, c_lsif_fit, xs_basis, max_ratio, add_reg_lsif)
 
         else:
 
             ws_train = ws_given_B(xs_train, xs_test, sigma_fit, B_fit, c_lsif_fit, max_ratio)
-            print 'N_eff:', ws_train.sum()**2 / np.dot(ws_train, ws_train)        
     
 
         b_opt_fit = b_opt_given_ws(B_fit, xs_train, ys_train, ws_train, c_pred_fit)
@@ -742,6 +846,16 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None,
             predictor = fxns.fxn(_val = lambda x: np.dot(project(np.array([x]), B_fit), b_opt_fit)[0])
             predictor.B = B_fit
             predictor.b = b_opt_fit
+            N_eff = fxns.N_eff(ws_train)
+            print 'N_eff:', N_eff, np.sum(1./ws_train)
+            predictor.N_eff = N_eff
+#            predictor.
+
+            if not KDE_ratio:
+                alpha_fit = alpha_given_B(xs_train, xs_test, sigma_fit, B_fit, c_lsif_fit, xs_basis, max_ratio, add_reg_lsif)
+                predictor.get_ws = lambda xs: fxns.lsif_alpha_to_ratios(alpha_fit, xs, xs_basis, sigma_fit, B_fit, max_ratio)
+            else:
+                predictor.get_ws = lambda xs: fxns.KDE_ws_oos(xs_train, xs_test, sigma_fit, B_fit, c_lsif_fit, max_ratio, xs)
 
         if not plot_b_info is None:
             plot_b_info(xs_train, xs_test, ys_train, ys_test, ws_train, predictor)
@@ -756,3 +870,4 @@ def lsif_ratio_fitter(which_loss, num_basis, tradeoff_weight_reg=0., u_dim=None,
     fitter.pseudo = pseudo
     
     return fitter
+
