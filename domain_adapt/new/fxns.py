@@ -7,6 +7,11 @@ import scipy.optimize, scipy
 #import autograd.scipy as scipy
 import python_utils.python_utils.basic as basic
 from autograd.core import primitive
+import collections, pandas as pd
+import time
+#import autograd.numpy as np
+from autograd.extend import primitive, defvjp
+
 
 NA = np.newaxis
 
@@ -19,7 +24,7 @@ def logsumexp(x):
 def logsumexp_vjp(g, ans, vs, gvs, x):
     return np.full(x.shape, g) * np.exp(x - np.full(x.shape, ans))
 
-logsumexp.defvjp(logsumexp_vjp)
+defvjp(logsumexp, logsumexp_vjp)
 
 def project(xs, B):
     return np.concatenate((np.dot(xs,B), np.ones((len(xs),1))), axis=1)
@@ -104,7 +109,7 @@ class fxn(object):
     def __call__(self, *args):
         return self.val(*args)
 
-    @basic.timeit('grad')
+#    @basic.timeit('grad')
     def grad(self, *args, **kwargs):
         # fix: possibly put _val_and_grad first, so that my custom forward/backward passes are called b4 autograd, like in the case of quadratic_objective
         care_argnums = kwargs.get('care_argnums', range(len(args)))
@@ -214,10 +219,14 @@ class fxn(object):
     @classmethod
     def wrap_primitive(cls, f):
         wrapped = primitive(f)
-        def fxn_vjps(argnum, g, ans, vs, gvs, *args):
-            return np.dot(g, f.grad(*args, care_argnums=(argnum,))) # fix: f assumed to output 1d vector
+#        def fxn_vjps(argnum, g, ans, vs, gvs, *args):
+#            return np.dot(g, f.grad(*args, care_argnums=(argnum,))) # fix: f assumed to output 1d vector
         max_argnum = 20
-        wrapped.defvjps(fxn_vjps, range(max_argnum))
+        def grad(argnum, ans, *args):
+            return lambda g: np.dot(g, f.grad(*args, care_argnums=(argnum,)))
+        import functools
+        defvjp(wrapped, *[functools.partial(grad, argnum) for argnum in xrange(max_argnum)])
+#        wrapped.defvjps(fxn_vjps, range(max_argnum))
         return wrapped
 
     def __repr__(self):
@@ -467,7 +476,7 @@ def lsif_alpha_to_ratios(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio):
     ans = np.maximum(0.01, ans)
     #ans = np.maximum(0, ans)
     ans = (ans / np.sum(ans)) * len(xs_train)
-    if True: # fix?
+    if False: # fix?
         ans = np.minimum(max_ratio, ans)
         ans = (ans / np.sum(ans)) * len(xs_train)
         ans = np.minimum(max_ratio, ans)
@@ -540,6 +549,10 @@ def logistic_regression_loss(B, xs, ys, ws, b, c, add_reg):
     return np.mean(ws * losses, axis=0) + (np.dot(b[:-1],b[:-1])*c) # fixed
 
 def logistic_regression_objective_helper(B, xs, ys, ws, c, b):
+    #print B
+    #print B.shape
+    #print 'asdfgg'
+#    pdb.set_trace()
     return logistic_regression_loss(B, xs, ys, ws, b, c, True)
 
 def weight_reg_given_lsif_alpha(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio):
@@ -727,6 +740,67 @@ class nystrom_kmm_objective(new_kmm_objective):
         (C,W_inv,C_T), kappa = self._Pq(xs_train, xs_test, sigma, B, w_max, eps, nystrom=True)
         return np.dot(np.dot(C,W_inv), C_T), kappa
 
+def N_eff(ws):
+    return ws.sum()**2 / np.dot(ws, ws)        
+
+
+def get_least_squares_ws(sigma, c_lsif, xs_train, xs_test, max_ratio=5.):
+    xs_basis = xs_test[0:100]
+    B = np.eye(xs_train.shape[1])
+    lsif_alpha = least_squares_lsif_alpha_given_B(xs_train, xs_test, sigma, B, c_lsif, xs_basis, 5., True)
+    ws_train = lsif_alpha_to_ratios(lsif_alpha, xs_train, xs_basis, sigma, B, max_ratio)
+    return ws_train
+
+
+def sklearn_ridge_fitter(alphas=None, cheat=False, use_train_oos=False):
+
+    def fitter(xs_train, xs_test, ys_train, ys_test=None, xs_train_oos=None, xs_test_oos=None, ys_train_oos=None, ys_test_oos=None):
+
+        if use_train_oos:
+            xs_train = np.concatenate((xs_train, xs_train_oos), axis=0)
+            ys_train = np.concatenate((ys_train, ys_train_oos))
+
+        from sklearn.linear_model import RidgeCV
+        _fitter = RidgeCV(alphas=alphas)
+        if not cheat:
+            _fitter.fit(xs_train, ys_train)
+#            print len(xs_train), 'no cheat'
+        else:
+            _fitter.fit(xs_test, ys_test)
+#            print len(xs_test), 'cheat'
+        predictor = lambda x: _fitter.predict([x])[0]
+        predictor.coef_ = _fitter.coef_
+        return predictor
+
+    return fitter
+
+
+def sklearn_ridge_logreg_fitter(alphas=None, cheat=False, use_train_oos=False):
+
+    def fitter(xs_train, xs_test, ys_train, ys_test=None, xs_train_oos=None, xs_test_oos=None, ys_train_oos=None, ys_test_oos=None):
+
+        if use_train_oos:
+            xs_train = np.concatenate((xs_train, xs_train_oos), axis=0)
+            ys_train = np.concatenate((ys_train, ys_train_oos))
+
+        from sklearn.linear_model import LogisticRegressionCV
+        _fitter = LogisticRegressionCV(Cs=alphas)
+#        pdb.set_trace()
+        if not cheat:
+            _fitter.fit(xs_train, (ys_train > 0).astype(int))
+            #print len(xs_train), 'no cheat'
+        else:
+            _fitter.fit(xs_test, (ys_test > 0).astype(int))
+            #print len(xs_test), 'cheat'
+        predictor = lambda x: np.log(_fitter.predict_proba([x])[0][1] / (1. -  _fitter.predict_proba([x])[0][1]))
+#        predictor = lambda x: float(_fitter.predict([x])[0] > 0.5)
+        predictor.coef_ = _fitter.coef_
+        return predictor
+
+    return fitter
+
+
+
 def SIR_directions(xs, ys, method='sir'):
     from rpy2.robjects.packages import importr
     import rpy2.robjects as ro, string
@@ -783,6 +857,19 @@ def KDE_ws(xs_train, xs_test, sigma, B, c_lsif, max_ratio, switch=False):
             ratios = N_test * ratios / np.sum(ratios)
         return ratios
 
+def KDE_ws_oos(xs_train, xs_test, sigma, B, c_lsif, max_ratio, xs_oos):
+    N_oos = len(xs_oos)
+    train_densities = KDE(xs_train, B, sigma, xs_oos)
+    test_densities = KDE(xs_test, B, sigma, xs_oos)
+    train_densities = train_densities + c_lsif # view c_lsif as pseudocount here
+    test_densities = test_densities + c_lsif
+    ratios = test_densities / train_densities
+    ratios = N_oos * ratios / np.sum(ratios)
+    if True: # fix?
+        ratios = np.minimum(max_ratio, ratios)
+        ratios = N_oos * ratios / np.sum(ratios)
+            
+    return ratios
 #def KLIEP_objective_given_ws(ws_train, ws_test):
 #    return np.log(ws_test) / len(ws_test)
 
@@ -821,7 +908,9 @@ def least_squares_lsif_alpha_given_B(xs_train, xs_test, sigma, B, c_lsif, xs_bas
 
 def kliep_objective(xs_train, xs_test, alpha):
     N_train, N_test = len(xs_train), len(xs_test)
-    return (- ( np.sum(np.dot(xs_test, alpha) / N_test) - (np.log(1./N_train) + logsumexp(np.dot(xs_train, alpha))) ))
+#    print 'test', (- ( np.sum(np.dot(xs_test, alpha) / N_test)))
+#    print 'train', logsumexp(np.dot(xs_train, alpha))
+    return (- ( np.sum(np.dot(xs_test, alpha) / N_test))) + (np.log(1./N_train) + logsumexp(np.dot(xs_train, alpha)))
 
 def loglinear_alpha_given_x(xs_train, xs_test, c):
 
@@ -855,6 +944,10 @@ def loglinear_ratios_given_x(xs_train, xs_test, c):
     ws_train = N_train * unnormalized_ws_train / np.sum(unnormalized_ws_train)
 
     return ws_train
+
+
+
+        
 
 
 class LSIF_objective(quad_objective):
@@ -1087,6 +1180,7 @@ class cvx_opt(opt):
 #    def __init__(self, lin_solver, objective, dobjective_dx, optimizer=optimizers.scipy_minimize_optimizer()): # FIX
     def __init__(self, lin_solver, objective, dobjective_dx, optimizer=optimizers.scipy_minimize_optimizer(options={'disp':False,'maxiter':1}), warm_start=True): # FIX
         self.optimizer, self.warm_start = optimizer, warm_start
+        self.old_x_opt = {}
         opt.__init__(self, lin_solver, objective, dobjective_dx)
 
     @property
@@ -1103,14 +1197,17 @@ class cvx_opt(opt):
             x0=np.random.normal(size=self.objective.arg_shape(*args))
         else:
             try:
-                x0 = self.old_x_opt
-            except AttributeError:
+                x0 = self.old_x_opt[self.objective.arg_shape(*args)]
+            except KeyError:
                 x0 = np.random.normal(size=self.objective.arg_shape(*args))
         logger = utils.optimizer_logger(f, df_dx)
 #        pdb.set_trace()
-        val = self.optimizer.optimize(f, df_dx, x0)
+        try:
+            val = self.optimizer.optimize(f, df_dx, x0)
+        except:
+            pdb.set_trace()
         if self.warm_start:
-            self.old_x_opt = val
+            self.old_x_opt[self.objective.arg_shape(*args)] = val
 #        ans = scipy.optimize.minimize(fun=f, x0=np.random.normal(size=self.objective.arg_shape(*args)), jac=df_dx, method='L-BFGS-B', options={'disp':10}, callback=logger)
         #logger.display_df()
         #logger.plot()
@@ -1141,14 +1238,16 @@ class full_quad_opt(opt):
         if self.warm_start:
             try:
                 init_x, init_ineq_dual_val = self.old_x, self.old_ineq_dual_val
+                if len(init_x) != G.shape[1]:
+                    raise ValueError
 #                pdb.set_trace()
                 from cvxopt import matrix
                 try:
                     primal_val, eq_dual_val, ineq_dual_val = qp.cvxopt_solver(P, q, G, h, initvals={'x':matrix(init_x), 'z':matrix(init_ineq_dual_val)})
                 except:
-                    print P
+#                    print P
                     pdb.set_trace()
-            except AttributeError:
+            except (AttributeError, ValueError):
                 primal_val, eq_dual_val, ineq_dual_val = qp.cvxopt_solver(P, q, G, h)
             self.old_x, self.old_ineq_dual_val = primal_val, ineq_dual_val
         else:
@@ -1160,7 +1259,7 @@ def kmm_get_Gh(xs_train, xs_test, sigma, B, w_max, eps):
     return kmm.get_kmm_Gh(w_max, eps, len(xs_train), len(xs_test))
 
 
-def LSIF_get_Gh(xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio):
+def LSIF_get_Gh(xs_train, xs_test, sigma, B, c_lsif, xs_basis, max_ratio, add_reg):
     num_bases = len(xs_basis)
     G_pre, h_pre = -1. * np.eye(num_bases), np.zeros(num_bases)
 #    return G_pre, h_pre
@@ -1329,14 +1428,17 @@ class sum(fxn):
         ans = 0.
         f_vals = []
         for (f,f_argnums,w) in itertools.izip(self.fs, self.fs_argnums, self.weights):
-            try:
-                f_args = [args[i] for i in f_argnums]
-            except:
-                pdb.set_trace()
-            #f_val = f.val(*f_args)
-            f_val = f(*f_args)
-            f_vals.append(f_val)
-            ans += w * f_val
+            if w != 0:
+                try:
+                    f_args = [args[i] for i in f_argnums]
+                except:
+                    pdb.set_trace()
+
+                f_val = f(*f_args)
+                f_vals.append(f_val)
+                ans += w * f_val
+            else:
+                f_vals.append(0.)
         #print f_vals, 'sum', self.fs
         return f_vals, ans
 
@@ -1347,7 +1449,8 @@ class sum(fxn):
         for (f,f_argnums,w) in itertools.izip(self.fs, self.fs_argnums, self.weights):
             f_args = [args[i] for i in f_argnums]
             try:
-                ans += w * f.grad(*f_args, care_argnums=[list(f_argnums).index(care_argnum) for care_argnum in care_argnums])
+                if w != 0:
+                    ans += w * f.grad(*f_args, care_argnums=[list(f_argnums).index(care_argnum) for care_argnum in care_argnums])
             except ValueError:
                 pass
         return ans
@@ -1687,3 +1790,663 @@ class sklearn_kernel_regression(object):
         predictor = lambda x: reg.predict([x])[0]
 
         return predictor
+
+class subsample_cv_getter(object):
+    
+    def __init__(self, is_prop_train, is_prop_test):
+        self.is_prop_train, self.is_prop_test = is_prop_train, is_prop_test
+
+    def __call__(self, i, xs_train, xs_test, ys_train, ys_test=None, data_tag=None):
+        assert False
+        N_train, N_test = len(xs_train), len(xs_test)
+        state = np.random.get_state()
+        np.random.seed(i)
+
+        num_is_train = int(self.is_prop_train * N_train)
+        is_keep_train = np.concatenate((np.ones(num_is_train).astype(bool), np.zeros(N_train-num_is_train).astype(bool)))
+        np.random.shuffle(is_keep_train)
+        oos_keep_train = np.logical_not(is_keep_train)
+
+        num_is_test = int(self.is_prop_test * N_test)
+        is_keep_test = np.concatenate((np.ones(num_is_test).astype(bool), np.zeros(N_test-num_is_test).astype(bool)))
+        np.random.shuffle(is_keep_test)
+        oos_keep_test = np.logical_not(is_keep_test)
+        np.random.set_state(state)
+        if isinstance(xs, np.ndarray):
+            ans = xs_train[is_keep_train], xs_test[is_keep_test], ys_train[is_keep_train], ys_test[is_keep_test], xs_train[oos_keep_train], xs[oos_keep_test], ys_train[oos_keep_train], ys_test[oos_keep_test]
+        else:
+            ans = xs_train.iloc[is_keep_train], xs_test.iloc[is_keep_test], ys_train.iloc[is_keep_train], ys_test.iloc[is_keep_test], xs_train.iloc[oos_keep_train], xs.iloc[oos_keep_test], ys_train.iloc[oos_keep_train], ys_test.iloc[oos_keep_test]
+        if data_tag is None:
+            return ans
+        else:
+            return ans, '(%s_subsample_is_prop_train_%.2f_is_prop_test_%.2ftrial_%d)' % (data_tag, self.is_prop_train, self.is_prop_test, i)
+
+class kfold_cv_getter(object):
+
+    def __init__(self, num_folds):
+        self.num_folds = num_folds
+
+    def __call__(self, i, xs_train, xs_test, ys_train, ys_test=None, data_tag=None):
+        assert False
+        state = np.random.get_state()
+        np.random.seed(42)
+        from sklearn.model_selection import StratifiedKFold, KFold
+        if (not (balance_col is None)) or to_balance:
+            s = StratifiedKFold(n_splits=self.num_folds, shuffle=False)
+            if not (balance_col is None):
+                assert len(zs.shape) == 2
+                if isinstance(zs, np.ndarray):
+                    balance = zs[:,balance_col]
+                else:
+                    balance = zs[balance_col]
+            else:
+                balance = zs
+            is_idxs, oos_idxs = s.split(xs, balance)[i]
+        else:
+            s = KFold(n_splits=self.num_folds, shuffle=False)
+            is_idxs, oos_idxs = list(s.split(xs, ys))[i]
+        np.random.set_state(state)
+        if isinstance(xs, np.ndarray):
+            ans = xs[is_idxs], ys[is_idxs], all_zs[is_idxs], xs[oos_idxs], ys[oos_idxs], all_zs[oos_idxs]
+        else:
+            ans = xs.iloc[is_idxs], ys.iloc[is_idxs], all_zs.iloc[is_idxs], xs.iloc[oos_idxs], ys.iloc[oos_idxs], all_zs.iloc[oos_idxs]
+        if data_tag is None:
+            return ans
+        else:
+            return ans, '(%s_fold_%d_%d)' % (data_tag, i, self.num_folds)
+
+class cfr_predictor(object):
+
+    def __init__(self, loss, dim, imb_fun, p_alpha, p_lambda, nonlin, use_test_cov, train_path, xs_train, xs_test, ys_train, ys_test, data_tag, info):
+        self.loss, self.dim, self.imb_fun, self.p_alpha, self.p_lambda, self.nonlin, self.use_test_cov, self.train_path  = loss, dim, imb_fun, p_alpha, p_lambda, nonlin, use_test_cov, train_path
+        self.xs_train, self.xs_test, self.ys_train, self.ys_test, self.data_tag, self.info = xs_train, xs_test, ys_train, ys_test, data_tag, info
+
+    def __repr__(self):
+        return 'loss=%s_dim=%d_imb_fun=%s_p_alpha=%.8f_p_lambda=%.8f_nonlin=%s' % (self.loss, self.dim, self.imb_fun, self.p_alpha, self.p_lambda, self.nonlin)
+
+    def predict(self, xs, use_test_cov=None):
+
+        # possibly add xs to xs_test
+        if not (use_test_cov is None):
+            use = use_test_cov
+        else:
+            use = self.use_test_cov
+        if use:
+            xs_test = np.concatenate((self.xs_test, xs), axis=0)
+        else:
+            xs_test = self.xs_test
+
+        # create temp folder
+        import python_utils.python_utils.caching as caching
+        import os
+        if self.data_tag is None:
+            temp_folder = '%s/%d/%s' % (caching.cache_folder, id(xs_train), repr(self))
+        else:
+            temp_folder = '%s/%s/%s' % (caching.cache_folder, self.data_tag, repr(self))
+        if not os.path.exists(temp_folder):
+            os.makedirs(temp_folder)
+
+        # put data into folder
+        datadir = '%s/%s/' % (temp_folder, 'data')
+        if not os.path.exists(datadir):
+            os.makedirs(datadir)
+        dataform = 'input.npz'
+        garbage_val = 42.
+        x = np.concatenate((self.xs_train, xs_test), axis=0)
+        yf = np.concatenate((self.ys_train, garbage_val * np.ones(len(xs_test))), axis=0)
+        t = np.concatenate((np.zeros(len(self.xs_train)), np.ones(len(xs_test))), axis=0)
+        np.savez('%s/%s' % (datadir, dataform), x=np.expand_dims(x,-1), yf=np.expand_dims(yf,-1), t=np.expand_dims(t,-1))
+
+        data_test = 'to_predict.npz'
+        x_test = xs
+        t_test = np.zeros(len(xs))
+        yf_test = garbage_val * np.ones(len(xs))
+        np.savez('%s/%s' % (datadir, data_test), x=np.expand_dims(x_test,-1), t=np.expand_dims(t_test,-1), yf=np.expand_dims(yf_test,-1))
+
+        # create output folder
+        outdir = '%s/%s' % (temp_folder,'results')
+        if not os.path.exists(outdir):
+            os.makedirs(outdir)
+#        pdb.set_trace()
+
+        # create argument string and run
+#        config_d = {'loss':self.loss, 'imb_fun':self.imb_fun, 'p_alpha':self.p_alpha, 'p_lambda':self.p_lambda, 'nonlin':self.nonlin, 'datadir':'\"%s\"' % datadir, 'dataform':'\"%s\"' %dataform, 'data_test':'\"%s\"' % data_test, 'outdir':'\"%s\"' % outdir}
+        config_d = {'loss':self.loss, 'imb_fun':self.imb_fun, 'p_alpha':self.p_alpha, 'p_lambda':self.p_lambda, 'nonlin':self.nonlin, 'datadir':'%s' % datadir, 'dataform':'%s' %dataform, 'data_test':'%s' % data_test, 'outdir':'%s' % outdir}
+        if self.dim == -1:
+            config_d['varsel'] = 1
+        else:
+            config_d['varsel'] = 0
+            config_d['dim_in'] = self.dim
+        flags = ' '.join('--%s %s' % (k,v) for (k,v) in config_d.iteritems())
+
+        import CFR.cfrnet.cfr_net_train as cfr_net_train
+        argv = [''] + flags.split(' ')
+        import sys
+        sys.argv = argv
+        print argv
+        cfr_net_train.my_run()
+
+        if False:
+            import subprocess
+            python_path = '/home/fultonw/anaconda2/bin/python2.7'
+            cmd = "%s %s %s" % (python_path, self.train_path, flags)
+            print cmd
+            cmd = [python_path, self.train_path, flags]
+        #        print cmd
+            subprocess.call(cmd, shell=False)
+        #        subprocess.call(cmd, shell=True)
+            import time
+            time.sleep(1)
+
+        # retrieve predictions
+        import os
+        result_paths = [os.path.join(outdir, o) for o in os.listdir(outdir) if os.path.isdir(os.path.join(outdir,o)) and o[0:7] == 'out_dir']
+        print result_paths
+        print [os.path.join(outdir, o) for o in os.listdir(outdir) if os.path.isdir(os.path.join(outdir,o))]
+#        pdb.set_trace()
+        assert len(result_paths) == 1
+        if len(result_paths) == 0:
+            return np.nan * np.zeros(len(xs))
+        result_path = result_paths[0]
+        train_out_path = '%s/%s' % (result_path, 'result.npz')
+        test_out_path = '%s/%s' % (result_path, 'result.test.npz')
+        d_train = np.load(train_out_path)
+        d_test = np.load(test_out_path)
+        return d_test['pred'][:,0,0,-1]
+        
+class cfr_fitter(object):
+
+    def __init__(self, loss, dim, imb_fun, p_alpha, p_lambda, nonlin, use_test_cov, info=None):
+        self.loss = {'square':'l2','abs':'l1','logistic':'log'}[loss]
+        self.dim, self.imb_fun, self.p_alpha, self.p_lambda, self.nonlin, self.use_test_cov = dim, imb_fun, p_alpha, p_lambda, nonlin, use_test_cov
+        self.train_path = '/home/fultonw/modules/CFR/cfrnet/cfr_net_train.py'
+        self.info = {} if info is None else info
+
+    def fit(self, xs_train, xs_test, ys_train, ys_test, data_tag=None):
+#        pdb.set_trace()
+        return cfr_predictor(self.loss, self.dim, self.imb_fun, self.p_alpha, self.p_lambda, self.nonlin, self.use_test_cov, self.train_path, xs_train, xs_test, ys_train, ys_test, data_tag, self.info)
+
+class cov_shift_fitter(object):
+
+    def __init__(self, raw_fitter, use_test_cov, info=None):
+        self.raw_fitter, self.use_test_cov = raw_fitter, use_test_cov
+        self.info = {} if info is None else info
+
+    def fit(self, xs_train, xs_test, ys_train, ys_test, data_tag=None):
+        return cov_shift_predictor(self.raw_fitter, self.use_test_cov, xs_train, xs_test, ys_train, ys_test, data_tag, self.info)
+
+class cov_shift_predictor(object):
+
+    def __init__(self, raw_fitter, use_test_cov, xs_train, xs_test, ys_train, ys_test, data_tag, info):
+        self.raw_fitter, self.use_test_cov, self.xs_train, self.xs_test, self.ys_train, self.ys_test, self.data_tag, self.info = raw_fitter, use_test_cov, xs_train, xs_test, ys_train, ys_test, data_tag, info
+        self.raw_predictor = None
+
+    def predict(self, xs, use_test_cov=None):
+        if not (use_test_cov is None):
+            use = use_test_cov
+        else:
+            use = self.use_test_cov
+        if use:
+            xs_test = np.concatenate((self.xs_test, xs), axis=0)
+        else:
+            xs_test = self.xs_test
+        if self.raw_predictor is None:
+            self.raw_predictor = self.raw_fitter(self.xs_train, xs_test, self.ys_train, self.ys_test)
+            self.info['N_eff'] = self.raw_predictor.N_eff
+            self.info['B'] = self.raw_predictor.B
+            self.info['b'] = self.raw_predictor.b
+            self.info['get_ws'] = self.raw_predictor.get_ws
+#        self.info['raw_predictor'] = self.raw_predictor
+        return np.array(map(self.raw_predictor, xs))
+
+    def get_ws(self, xs):
+        return self.raw_predictor.get_ws(xs)
+
+class subgroup_kfold_cv_getter(object):
+
+    def __init__(self, num_folds):
+        self.num_folds = num_folds
+
+    def __str__(self):
+        return 'subgroup_%d_fold' % self.num_folds
+
+    def __call__(self, i, xs_train, xs_test, ys_train, ys_test, data_tag=None):
+
+        import subgroup
+        get_row = subgroup.get_get_row(xs_train)
+        concat = subgroup.get_concat(xs_train)
+
+        state = np.random.get_state()
+        np.random.seed(42)
+
+        from sklearn.model_selection import KFold
+        s = KFold(n_splits=self.num_folds, shuffle=False)
+
+        N_train, N_test = len(xs_train), len(xs_test)
+        assert (get_row(xs_train,slice(-N_test,None)) == xs_test).all()
+        zero_xs, zero_ys = get_row(xs_train,slice(0,-N_test)), get_row(ys_train,slice(0,-N_test))
+        one_xs, one_ys = xs_test, ys_test
+        zero_is_idxs, zero_oos_idxs = list(s.split(zero_xs, zero_ys))[i % self.num_folds]
+        one_is_idxs, one_oos_idxs = list(s.split(one_xs, one_ys))[i % self.num_folds]
+        zero_is_xs, zero_is_ys = get_row(zero_xs,zero_is_idxs), get_row(zero_ys,zero_is_idxs)
+        one_is_xs, one_is_ys = get_row(one_xs,one_is_idxs), get_row(one_ys,one_is_idxs)
+        zero_oos_xs, zero_oos_ys = get_row(zero_xs,zero_oos_idxs), get_row(zero_ys,zero_oos_idxs)
+        one_oos_xs, one_oos_ys = get_row(one_xs,one_oos_idxs), get_row(one_ys,one_oos_idxs)
+
+        xs_train_is, ys_train_is = concat((zero_is_xs, one_is_xs), axis=0), concat((zero_is_ys, one_is_ys), axis=0)
+        xs_test_is, ys_test_is = one_is_xs, one_is_ys
+        xs_train_oos, ys_train_oos = concat((zero_oos_xs, one_oos_xs), axis=0), concat((zero_oos_ys, one_oos_ys), axis=0)
+        xs_test_oos, ys_test_oos = one_oos_xs, one_oos_ys
+
+        ans = xs_train_is, xs_test_is, ys_train_is, ys_test_is, xs_train_oos, xs_test_oos, ys_train_oos, ys_test_oos
+
+        np.random.set_state(state)
+
+        if data_tag is None:
+            return ans
+        else:
+            return ans, '(%s_subgroup_kfold_%d_%d)' % (data_tag, i, self.num_folds)
+
+class kfold_cv_getter(object):
+
+    def __init__(self, num_folds):
+        self.num_folds = num_folds
+
+    def __str__(self):
+        return '%d_fold' % self.num_folds
+
+    def __call__(self, i, xs_train, xs_test, ys_train, ys_test, data_tag=None):
+
+        import subgroup
+        get_row = subgroup.get_get_row(xs_train)
+        concat = subgroup.get_concat(xs_train)
+
+        state = np.random.get_state()
+        np.random.seed(42)
+
+        from sklearn.model_selection import KFold
+        s = KFold(n_splits=self.num_folds, shuffle=False)
+
+        N_train, N_test = len(xs_train), len(xs_test)
+        train_is_idxs, train_oos_idxs = list(s.split(xs_train, ys_train))[i % self.num_folds]
+        xs_train_is, xs_train_oos = get_row(xs_train, train_is_idxs), get_row(xs_train, train_oos_idxs)
+        ys_train_is, ys_train_oos = get_row(ys_train, train_is_idxs), get_row(ys_train, train_oos_idxs)
+
+        test_is_idxs, test_oos_idxs = list(s.split(xs_test, ys_test))[i % self.num_folds]
+        xs_test_is, xs_test_oos = get_row(xs_test, test_is_idxs), get_row(xs_test, test_oos_idxs)
+        ys_test_is, ys_test_oos = get_row(ys_test, test_is_idxs), get_row(ys_test, test_oos_idxs)
+
+        ans = xs_train_is, xs_test_is, ys_train_is, ys_test_is, xs_train_oos, xs_test_oos, ys_train_oos, ys_test_oos
+
+        np.random.set_state(state)
+
+        if data_tag is None:
+            return ans
+        else:
+            return ans, '(%s_kfold_%d_%d)' % (data_tag, i, self.num_folds)
+
+class sample_cv_getter(object):
+
+    def __init__(self, prop_train_is, prop_test_is):
+        self.prop_train_is, self.prop_test_is = prop_train_is, prop_test_is
+
+    def __call__(self, i, xs_train, xs_test, ys_train, ys_test, data_tag=None):
+
+        import subgroup
+        get_row = subgroup.get_get_row(xs_train)
+        concat = subgroup.get_concat(xs_train)
+
+        state = np.random.get_state()
+        np.random.seed(i)
+
+        train_idxs = np.arange(len(xs_train))
+        test_idxs = np.arange(len(xs_test))
+        np.random.shuffle(train_idxs)
+        np.random.shuffle(test_idxs)
+
+        xs_train = get_row(xs_train, train_idxs)
+        ys_train = get_row(ys_train, train_idxs)
+        xs_test = get_row(xs_test, test_idxs)
+        ys_test = get_row(ys_test, test_idxs)
+
+        N_train_is = int(self.prop_train_is * len(xs_train))
+        N_test_is = int(self.prop_test_is * len(xs_test))
+        xs_train_is = get_row(xs_train, slice(0,N_train_is))
+        xs_train_oos = get_row(xs_train, slice(N_train_is,None))
+        xs_test_is = get_row(xs_test, slice(0,N_test_is))
+        xs_test_oos = get_row(xs_test, slice(N_test_is,None))
+        ys_train_is = get_row(ys_train, slice(0,N_train_is))
+        ys_train_oos = get_row(ys_train, slice(N_train_is,None))
+        ys_test_is = get_row(ys_test, slice(0,N_test_is))
+        ys_test_oos = get_row(ys_test, slice(N_test_is,None))
+
+        ans = xs_train_is, xs_test_is, ys_train_is, ys_test_is, xs_train_oos, xs_test_oos, ys_train_oos, ys_test_oos
+
+        if data_tag is None:
+            return ans
+        else:
+            return ans, '%s_%.2f_%.2f_%d' % (data_tag, self.prop_train_is, self.prop_test_is, i)
+
+    def __repr__(self):
+        return 'sample_cv_%.2f_%.2f' % (self.prop_train_is, self.prop_test_is)
+
+class subgroup_one_oos_fitting_eval_getter(object):
+
+    def __call__(self, xs_train_is, xs_test_is, ys_train_is, ys_test_is, xs_train_oos, xs_test_oos, ys_train_oos, ys_test_oos, data_tag=None):
+    
+        import subgroup
+        get_row = subgroup.get_get_row(xs_train_is)
+        concat = subgroup.get_concat(xs_train_is)
+
+        N_test_is = len(xs_test_is)
+        zero_xs_is, zero_ys_is = get_row(xs_train_is, slice(0,-N_test_is)), get_row(ys_train_is, slice(0,-N_test_is))
+        one_xs_is, one_ys_is = xs_test_is, ys_test_is
+
+        N_test_oos = len(xs_test_oos)
+        zero_xs_oos, zero_ys_oos = get_row(xs_train_oos, slice(0,-N_test_oos)), get_row(ys_train_oos, slice(0,-N_test_oos))
+        one_xs_oos, one_ys_oos = xs_test_oos, ys_test_oos
+
+        xs_train_fitting, ys_train_fitting = concat((zero_xs_is,zero_xs_oos,one_xs_is), axis=0), concat((zero_ys_is,zero_ys_oos,one_ys_is), axis=0)
+        xs_test_fitting, ys_test_fitting = one_xs_is, one_ys_is
+
+        xs_eval, ys_eval = one_xs_oos, one_ys_oos
+
+        ans = xs_train_fitting, xs_test_fitting, ys_train_fitting, ys_test_fitting, xs_eval, ys_eval
+
+        if data_tag is None:
+            return ans
+        else:
+            return ans, '(%s_one_oos)' % data_tag
+
+    def __str__(self):
+        return 'subgroup_one_oos'
+
+class train_oos_fitting_eval_getter(object):
+
+    def __call__(self, xs_train_is, xs_test_is, ys_train_is, ys_test_is, xs_train_oos, xs_test_oos, ys_train_oos, ys_test_oos, data_tag=None):
+    
+        import subgroup
+        get_row = subgroup.get_get_row(xs_train_is)
+        concat = subgroup.get_concat(xs_train_is)
+
+        xs_train_fitting, ys_train_fitting = xs_train_is, ys_train_is
+        xs_test_fitting, ys_test_fitting = concat((xs_test_is,xs_test_oos), axis=0), concat((ys_test_is,ys_test_oos), axis=0)
+        xs_eval, ys_eval = xs_train_oos, ys_train_oos
+
+
+        ans = xs_train_fitting, xs_test_fitting, ys_train_fitting, ys_test_fitting, xs_eval, ys_eval
+
+        if data_tag is None:
+            return ans
+        else:
+            return ans, '(%s_train_oos)' % data_tag
+
+    def __str__(self):
+        return 'train_oos'
+
+class test_oos_fitting_eval_getter(object):
+
+    def __call__(self, xs_train_is, xs_test_is, ys_train_is, ys_test_is, xs_train_oos, xs_test_oos, ys_train_oos, ys_test_oos, data_tag=None):
+    
+        import subgroup
+        get_row = subgroup.get_get_row(xs_train_is)
+        concat = subgroup.get_concat(xs_train_is)
+
+        xs_train_fitting, ys_train_fitting = concat((xs_train_is,xs_train_oos), axis=0), concat((ys_train_is, ys_train_oos), axis=0)
+        xs_test_fitting, ys_test_fitting = xs_test_is, ys_test_is
+        xs_eval, ys_eval = xs_test_oos, ys_test_oos
+
+        ans = xs_train_fitting, xs_test_fitting, ys_train_fitting, ys_test_fitting, xs_eval, ys_eval
+
+        if data_tag is None:
+            return ans
+        else:
+            return ans, '(%s_test_oos)' % data_tag
+
+    def __str__(self):
+        return 'train_oos'
+
+class iden_fitting_eval_getter(object):
+
+    def __call__(self, xs_train_is, xs_test_is, ys_train_is, ys_test_is, xs_train_oos, xs_test_oos, ys_train_oos, ys_test_oos, data_tag=None):
+        ans = xs_train_is, xs_test_is, ys_train_is, ys_test_is, xs_test_is, ys_test_is
+        if data_tag is None:
+            return ans
+        else:
+            return ans, '(%s_iden)' % data_tag
+
+    def __str__(self):
+        return 'iden'
+
+class imputed_test_oos_fitting_eval_getter(object):
+
+    def __init__(self, use_train_is_impute, use_train_oos_training):
+        self.use_train_is_impute, self.use_train_oos_training = use_train_is_impute, use_train_oos_training
+
+    def __call__(self, xs_train_is, xs_test_is, ys_train_is, ys_test_is, xs_train_oos, xs_test_oos, ys_train_oos, ys_test_oos, data_tag=None):
+    
+        import subgroup
+        get_row = subgroup.get_get_row(xs_train_is)
+        concat = subgroup.get_concat(xs_train_is)
+
+        if self.use_train_oos_training:
+            xs_train_fitting, ys_train_fitting = concat((xs_train_is,xs_train_oos), axis=0), concat((ys_train_is, ys_train_oos), axis=0)
+        else:
+            xs_train_fitting, ys_train_fitting = xs_train_is, ys_train_is
+        xs_test_fitting, ys_test_fitting = xs_test_is, ys_test_is
+        xs_eval = xs_test_oos
+
+        if self.use_train_is_impute:
+            xs_impute, ys_impute = concat((xs_train_is, xs_train_oos), axis=0), concat((ys_train_is, ys_train_oos), axis=0)
+        else:
+            xs_impute, ys_impute = xs_train_oos, ys_train_oos
+
+        try:
+            dists = np.sum((xs_eval[:,np.newaxis,:] - xs_impute[np.newaxis,:,:])**2, axis=2)
+        except TypeError:
+            dists = np.sum((xs_eval.values[:,np.newaxis,:] - xs_impute.values[np.newaxis,:,:])**2, axis=2)
+        ys_eval = get_row(ys_impute, np.argmin(dists, axis=1))
+
+        ans = xs_train_fitting, xs_test_fitting, ys_train_fitting, ys_test_fitting, xs_eval, ys_eval
+
+        if data_tag is None:
+            return ans
+        else:
+            return ans, '(%s_test_oos)' % data_tag
+
+    def __str__(self):
+        return 'imputed_test_oos_utii=%d_utot=%d' % (self.use_train_is_impute, self.use_train_oos_training)
+
+def eval_predictions_reader(path):
+    # fix
+#    pdb.set_trace()
+    df = pd.read_csv(path, index_col=0, header=0)
+    if df.shape[1] == 1:
+        return df.iloc[:,0].values
+#        return df['ys_hat'].values
+    elif df.shape[1] == 2:
+        return df['ys_hat'].values, df['ws'].values
+#    return np.array(pd.Series.from_csv(path))
+
+def eval_predictions_writer(ans, path):
+    if isinstance(ans, tuple):
+        assert len(ans) == 2
+        ys_hat, ws = ans
+        pd.DataFrame({'ys_hat':ys_hat, 'ws':ws}).to_csv(path)
+    else:
+        ys_hat = ans
+        pd.DataFrame({'ys_hat':ys_hat}).to_csv(path)
+#        pd.Series(ys_hat).to_csv(path)
+
+def eval_predictions_get_path(identifier, fitter_info, xs_train_fitting, xs_test_fitting, ys_train_fitting, ys_test_fitting, xs_eval, ys_eval, get_eval_ws, data_tag):
+    fitter_name, fitter = fitter_info
+    import python_utils.python_utils.caching as caching
+    return '%s/%s_%s_get_eval_ws=%s' % (caching.cache_folder, fitter_name, data_tag, get_eval_ws)
+
+eval_predictions_suffix = 'csv'
+
+def eval_predictions(fitter_info, xs_train_fitting, xs_test_fitting, ys_train_fitting, ys_test_fitting, xs_eval, ys_eval, get_eval_ws, data_tag): # fix, add default None argument to data_tag?
+#    assert False
+    fitter_name, fitter = fitter_info
+    predictor = fitter.fit(xs_train_fitting, xs_test_fitting, ys_train_fitting, ys_test_fitting, data_tag)
+    ys_eval_hat = predictor.predict(xs_eval)
+    if not get_eval_ws:
+        return ys_eval_hat
+    else:
+        return ys_eval_hat, predictor.get_ws(xs_eval)
+
+def accuracy(ys_hat, ys, ws=None):
+    if ws is None:
+        ws = np.ones(len(ys))
+    return (((ys_hat > 0) == (ys > 0)).astype(float) * ws).sum() / float(len(ys))
+
+def zero_one_loss(ys_hat, ys, ws=None):
+    return 1. - accuracy(ys_hat, ys, ws)
+
+from sklearn.metrics import roc_auc_score
+def auroc(ys_hat, ys, ws=None):
+    try:
+        if ws is None:
+            return roc_auc_score((ys > 0).astype(int), ys_hat)
+        else:
+            return roc_auc_score((ys > 0).astype(int), ys_hat, sample_weight=ws)
+    except:
+        return np.nan
+
+def one_minus_auroc(ys_hat, ys, ws=None):
+    return 1. - auroc(ys_hat, ys, ws)
+
+def squared_error(ys_hat, ys, ws=None):
+    if ws is None:
+        ws = np.ones(len(ys))
+    return np.mean(((ys_hat - ys)**2) * ws)
+
+def abs_error(ys_hat, ys, ws=None):
+    if ws is None:
+        ws = np.ones(len(ys))
+    return np.mean(np.abs((ys_hat - ys)) * ws)
+
+class cv_cov_shift_fitter(object):
+
+    def __init__(self, fitter_infos, cv_getter, fitting_eval_getter, num_folds, cache, recompute, metric, get_eval_ws=False):
+        self.fitter_infos, self.cv_getter, self.fitting_eval_getter, self.num_folds, self.cache, self.recompute, self.metric, self.get_eval_ws = fitter_infos, cv_getter, fitting_eval_getter, num_folds, cache, recompute, metric, get_eval_ws
+
+    def fit(self, xs_train, xs_test, ys_train, ys_test, data_tag=None):
+
+        if self.cache:
+#            pdb.set_trace()
+            assert not (data_tag is None)
+            original_data_tag = data_tag
+            import python_utils.python_utils.caching as caching
+            f = caching.switched_decorator(eval_predictions, True, self.recompute, eval_predictions_reader, eval_predictions_writer, eval_predictions_get_path, eval_predictions_suffix)
+        else:
+            f = eval_predictions
+
+        cv_start_time = time.time()
+
+        d = collections.defaultdict(list)
+
+        for fitter_info in self.fitter_infos:
+
+            fitter_name, fitter = fitter_info
+
+            for i in xrange(self.num_folds):
+
+                if self.cache:
+                    (xs_train_is, xs_test_is, ys_train_is, ys_test_is, xs_train_oos, xs_test_oos, ys_train_oos, ys_test_oos), data_tag = self.cv_getter(i, xs_train, xs_test, ys_train, ys_test, data_tag=original_data_tag)
+                    (xs_train_fitting, xs_test_fitting, ys_train_fitting, ys_test_fitting, xs_eval, ys_eval), data_tag  = self.fitting_eval_getter(xs_train_is, xs_test_is, ys_train_is, ys_test_is, xs_train_oos, xs_test_oos, ys_train_oos, ys_test_oos, data_tag)                
+                else:
+                    xs_train_is, xs_test_is, ys_train_is, ys_test_is, xs_train_oos, xs_test_oos, ys_train_oos, ys_test_oos = self.cv_getter(i, xs_train, xs_test, ys_train, ys_test)
+                    xs_train_fitting, xs_test_fitting, ys_train_fitting, ys_test_fitting, xs_eval, ys_eval  = self.get_fitting_and_eval_data(xs_train_is, xs_test_is, ys_train_is, ys_test_is, xs_train_oos, xs_test_oos, ys_train_oos, ys_test_oos)
+#                pdb.set_trace()
+                if self.get_eval_ws:
+                    ys_eval_hat, ws_eval_hat = f(fitter_info, xs_train_fitting, xs_test_fitting, ys_train_fitting, ys_test_fitting, xs_eval, ys_eval, True, data_tag)
+                    d[fitter_name].append(self.metric(ys_eval_hat, ys_eval, ws_eval_hat))
+                else:
+#                    pdb.set_trace()
+                    ys_eval_hat = f(fitter_info, xs_train_fitting, xs_test_fitting, ys_train_fitting, ys_test_fitting, xs_eval, ys_eval, False, data_tag)
+#                    pdb.set_trace()
+                    d[fitter_name].append(self.metric(ys_eval_hat, ys_eval))
+
+        cv_end_time = time.time()
+
+        import pandas as pd
+        mean_series = pd.DataFrame(d).mean(axis=0)
+        std_series = pd.DataFrame(d).std(axis=0)
+        chosen_series = (mean_series == mean_series.min()).astype(float)
+        best_fitter_name = mean_series.argmin()
+        best_fitter = dict(self.fitter_infos)[best_fitter_name]
+
+        final_start_time = time.time()
+#        pdb.set_trace()
+        self.best_predictor = best_fitter.fit(xs_train, xs_test, ys_train, ys_test, original_data_tag)
+        final_end_time = time.time()
+
+        self.info = dict(
+            [(('mean_metric',fitter_name),val) for (fitter_name,val) in mean_series.iteritems()] +
+            [(('std_metric',fitter_name),val) for (fitter_name,val) in std_series.iteritems()] +
+            [(('chosen',fitter_name),val) for (fitter_name,val) in chosen_series.iteritems()]
+            )
+
+        self.info['cv_time'] = cv_end_time - cv_start_time
+        self.info['cv_final_fit_time'] = final_end_time - final_start_time
+        self.info['train_size'] = len(xs_train)
+        self.info['test_size'] = len(xs_test)
+
+        print 'beg'
+#        print pd.DataFrame(d)
+        print mean_series
+#        print best_fitter_name, best_fitter
+        print 'best'
+
+        return self
+
+    def get_ws(self, xs):
+        return self.best_predictor.get_ws(xs)
+
+    def predict(self, xs):
+        start_time = time.time()
+        ys_hat = self.best_predictor.predict(xs)
+        end_time = time.time()
+        self.info.update(self.best_predictor.info)
+        self.info['cv_predict_time'] = end_time - start_time
+        self.info['predict_size'] = len(xs)
+        return ys_hat
+
+def VI(loss, xs, ys, predictor, num_trials=1):
+    if loss == 'logistic':
+        def total_loss(xs, ys, predictor):
+            logits = predictor.predict(xs)
+            print 'logits', logits
+            return np.mean(np.log(1 + np.exp(-ys * logits)))
+    elif loss == 'square':
+        def total_loss(xs, ys, predictor):
+            ys_hat = predictor.predict(xs)
+            return np.mean((ys - ys_hat) ** 2)
+
+    D = xs.shape[1]
+    in_order = np.arange(D)
+    original_loss = total_loss(xs, ys, predictor)
+    import copy
+
+    b = np.dot(predictor.info['B'],predictor.info['b'][:-1])
+    import python_utils.python_utils.caching as caching
+    caching.fig_archiver.log_text('b', b)
+
+    VIss = []
+    for i in xrange(num_trials):
+        VIs = np.zeros(D)
+        shuffled_order = np.random.shuffle(np.arange(D))
+        for j in xrange(xs.shape[1]):
+            original_col = copy.deepcopy(xs[:,j])
+#            print 'orig_col', original_col
+            shuffled_col = copy.deepcopy(xs[:,j])
+            np.random.shuffle(shuffled_col)
+#            print 'shuf_col', shuffled_col
+            xs[:,j] = shuffled_col
+            VIs[j] = total_loss(xs, ys, predictor) - original_loss
+#            print total_loss(xs, ys, predictor), original_loss, b[j]
+            xs[:,j] = original_col
+#            print total_loss(xs, ys, predictor)
+        VIss.append(VIs)
+    return np.mean(VIss, axis=0)
